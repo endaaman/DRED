@@ -1,0 +1,17 @@
+FROM ./Mistral-Nemo-Japanese-Instruct-2408.Q4_K_M.gguf
+#
+#
+# # Mistral Instructフォーマット
+# TEMPLATE """<s>[INST] {{ .System }} {{ .Prompt }} [/INST] {{ .Response }}</s>"""
+#
+# # 日本語生成に適したパラメータ
+# PARAMETER temperature 0.5
+# PARAMETER top_p 0.9
+# PARAMETER top_k 20
+# PARAMETER repeat_penalty 1.1
+# PARAMETER num_ctx 4096
+# PARAMETER num_predict 512
+# PARAMETER stop "</s>"
+# PARAMETER stop "<s>"
+# PARAMETER stop "[INST]"
+# PARAMETER stop "[/INST]"
