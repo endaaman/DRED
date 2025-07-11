@@ -31,8 +31,8 @@ cd dify-setup
 
 # 必要なディレクトリの事前作成（権限問題対策）
 echo "📁 必要なディレクトリを作成中..."
-mkdir -p volumes/app/storage volumes/certbot/conf volumes/certbot/www
-mkdir -p volumes/db volumes/redis volumes/weaviate logs
+mkdir -p volumes/{app/storage,db/data,redis/data,weaviate,plugin_daemon,sandbox}
+echo "✅ ボリュームディレクトリ作成完了（rootにならない対策）"
 
 # .env設定
 if ! grep -q "EXPOSE_NGINX_PORT" .env 2>/dev/null; then

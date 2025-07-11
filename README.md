@@ -35,6 +35,11 @@ docker compose up -d
 
 ## トラブルシューティング
 
+### マーケットプレイスからプラグインインストール失敗
+- エラー: `Reached maximum retries (3) for URL https://marketplace.dify.ai/api/v1/plugins/download`
+- 原因: コミュニティプラグインの検査
+- 対処: `FORCE_VERIFYING_SIGNATURE=false`
+
 ```bash
 # コンテナ確認
 docker compose ps
