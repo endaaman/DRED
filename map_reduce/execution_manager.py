@@ -141,9 +141,9 @@ class ExecutionManager:
         return f"{doc_index:03d}_{subdir}_{filename}.json"
     
     def save_single_qa_result(self, run_id: str, doc_index: int, doc_path: Path, 
-                            result: Dict[str, Any]) -> str:
+                            result: Dict[str, Any]) -> Dict[str, str]:
         """
-        single_qa結果を保存
+        single_qa結果をJSONとTXT両方で保存
         
         Args:
             run_id: 実行ID
@@ -152,15 +152,49 @@ class ExecutionManager:
             result: 結果データ
             
         Returns:
-            str: 保存されたファイルパス
+            Dict[str, str]: 保存されたファイルパス（json, txt）
         """
-        filename = self.generate_single_qa_filename(doc_index, doc_path)
-        output_path = self.get_single_qa_dir(run_id) / filename
+        base_filename = self.generate_single_qa_filename(doc_index, doc_path)
+        base_name = base_filename.replace('.json', '')
         
-        with open(output_path, 'w', encoding='utf-8') as f:
+        json_path = self.get_single_qa_dir(run_id) / f"{base_name}.json"
+        txt_path = self.get_single_qa_dir(run_id) / f"{base_name}.txt"
+        
+        # JSON保存（機械読み取り用）
+        with open(json_path, 'w', encoding='utf-8') as f:
             json.dump(result, f, indent=2, ensure_ascii=False)
+        
+        # TXT保存（人間読み取り用）
+        with open(txt_path, 'w', encoding='utf-8') as f:
+            f.write(f"=== Single QA結果 ===\n\n")
+            f.write(f"ドキュメント: {result['document_path']}\n")
+            f.write(f"質問: {result['question']}\n")
+            f.write(f"テンプレート: {result['template']}\n\n")
+            f.write(f"=== 回答 ===\n\n")
+            f.write(f"{result['answer']}\n\n")
             
-        return str(output_path)
+            if 'metadata' in result:
+                metadata = result['metadata']
+                f.write(f"=== 実行情報 ===\n\n")
+                f.write(f"ドキュメント長: {metadata.get('document_length', 'N/A'):,} 文字\n")
+                f.write(f"プロンプト長: {metadata.get('prompt_length', 'N/A'):,} 文字\n")
+                
+                if 'total_tokens' in metadata:
+                    f.write(f"使用トークン: {metadata['total_tokens']:,} tokens\n")
+                    f.write(f"残りコンテキスト: {metadata.get('remaining_tokens', 'N/A'):,} tokens\n")
+                
+                if 'timing' in metadata:
+                    timing = metadata['timing']
+                    f.write(f"実行時間:\n")
+                    f.write(f"  ドキュメント読み込み: {timing['document_load_time']:.2f}s\n")
+                    f.write(f"  プロンプト作成: {timing['prompt_creation_time']:.2f}s\n")
+                    f.write(f"  LLM処理: {timing['llm_query_time']:.2f}s\n")
+                    f.write(f"  総実行時間: {timing['total_time']:.2f}s\n")
+            
+        return {
+            'json': str(json_path),
+            'txt': str(txt_path)
+        }
     
     def load_single_qa_results(self, run_id: str) -> List[Dict[str, Any]]:
         """single_qa結果を全て読み込み"""

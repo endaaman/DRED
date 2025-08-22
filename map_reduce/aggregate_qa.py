@@ -13,6 +13,7 @@ import concurrent.futures
 import sys
 import argparse
 import json
+import time
 from pathlib import Path
 from typing import List, Dict, Any
 from datetime import datetime
@@ -39,30 +40,14 @@ def create_aggregate_prompt(question: str, single_results: List[Dict[str, Any]],
     template_path = Path(__file__).parent / "prompts" / "aggregate_qa" / f"{template_name}.txt"
     
     if not template_path.exists():
-        # デフォルトテンプレートを使用
-        template = """以下は複数の行政文書から得られた回答です。これらを統合して、最も適切で包括的な回答を作成してください。
-
-元の質問: 「{question}」
-
-各文書からの回答:
-{document_answers}
-
-上記の回答を分析し、以下の形式で統合回答を作成してください：
-
-## 統合回答
-
-[最も適切で包括的な回答]
-
-## 根拠・出典
-
-[どの文書のどの部分に基づいているかを明記]
-
-## 注意事項
-
-[制約事項や追加で確認が必要な事項があれば記載]
-"""
-    else:
-        template = template_path.read_text(encoding='utf-8')
+        available_templates = list((Path(__file__).parent / "prompts" / "aggregate_qa").glob("*.txt"))
+        available_names = [t.stem for t in available_templates]
+        raise FileNotFoundError(
+            f"Aggregate template '{template_name}' not found. "
+            f"Available templates: {', '.join(available_names)}"
+        )
+    
+    template = template_path.read_text(encoding='utf-8')
     
     # 各文書の回答を整理
     document_answers = []
@@ -79,7 +64,7 @@ def create_aggregate_prompt(question: str, single_results: List[Dict[str, Any]],
 
 def run_single_qa_batch(documents: List[Dict[str, Any]], question: str, 
                        template_name: str, max_workers: int = 3,
-                       show_progress: bool = True) -> List[Dict[str, Any]]:
+                       show_progress: bool = True, run_id: str = None) -> List[Dict[str, Any]]:
     """
     single_qaを並列実行
     
@@ -101,6 +86,16 @@ def run_single_qa_batch(documents: List[Dict[str, Any]], question: str,
             single_doc_qa._SILENT_MODE = show_progress
             
             result = single_document_qa(doc_info['path'], question, template_name)
+            
+            # run_idが指定されていれば逐次保存
+            if run_id:
+                from execution_manager import ExecutionManager
+                exec_manager = ExecutionManager()
+                save_paths = exec_manager.save_single_qa_result(
+                    run_id, doc_info['index'], Path(doc_info['path']), result
+                )
+                if pbar:
+                    pbar.set_postfix_str(f"保存: {doc_info['filename'][:15]}...")
             
             if pbar:
                 pbar.set_postfix_str(f"{doc_info['filename'][:20]}...")
@@ -160,7 +155,7 @@ def run_single_qa_batch(documents: List[Dict[str, Any]], question: str,
 
 
 def run_aggregate_qa(question: str, single_template: str = "baseline",
-                    aggregate_template: str = "consensus", parallel: int = 3,
+                    aggregate_template: str = "baseline", parallel: int = 3,
                     subdir_filter: List[str] = None) -> str:
     """
     Map-Reduce質問応答の完全実行
@@ -176,6 +171,7 @@ def run_aggregate_qa(question: str, single_template: str = "baseline",
         str: 実行ID
     """
     # 実行管理開始
+    start_time = time.time()
     exec_manager = ExecutionManager()
     run_id = exec_manager.create_run()
     
@@ -208,22 +204,36 @@ def run_aggregate_qa(question: str, single_template: str = "baseline",
         
         # Single QA並列実行
         print("Single QA実行開始...", file=sys.stderr)
-        single_results = run_single_qa_batch(documents, question, single_template, parallel)
+        single_start_time = time.time()
+        single_results = run_single_qa_batch(documents, question, single_template, parallel, True, run_id)
+        single_total_time = time.time() - single_start_time
         
-        # Single QA結果保存
-        for result in single_results:
-            doc_index = next((doc['index'] for doc in documents 
-                            if doc['path'] == result['document_path']), 0)
-            doc_path = Path(result['document_path'])
-            exec_manager.save_single_qa_result(run_id, doc_index, doc_path, result)
+        # Single QA結果は並列実行中に逐次保存済み
         
         # Aggregate実行
         print("Aggregate処理開始...", file=sys.stderr)
+        aggregate_start_time = time.time()
         aggregate_prompt = create_aggregate_prompt(question, single_results, aggregate_template)
         
         # LLMでaggregate処理
         from single_doc_qa import query_llm
         aggregate_answer, aggregate_metadata = query_llm(aggregate_prompt)
+        aggregate_time = time.time() - aggregate_start_time
+        
+        # 総実行時間計算
+        total_time = time.time() - start_time
+        
+        # Single QA の統計情報を計算
+        single_timings = []
+        single_tokens = []
+        for result in single_results:
+            if 'metadata' in result and 'timing' in result['metadata']:
+                single_timings.append(result['metadata']['timing']['total_time'])
+            if 'metadata' in result and 'total_tokens' in result['metadata']:
+                single_tokens.append(result['metadata']['total_tokens'])
+        
+        avg_single_time = sum(single_timings) / len(single_timings) if single_timings else 0
+        total_single_tokens = sum(single_tokens) if single_tokens else 0
         
         # Aggregate結果保存
         aggregate_result = f"""=== MAP-REDUCE質問応答結果 ===
@@ -245,7 +255,16 @@ def run_aggregate_qa(question: str, single_template: str = "baseline",
 
 === 実行統計 ===
 
-Aggregateトークン使用量: {aggregate_metadata.get('total_tokens', 'N/A')}
+実行時間:
+- Single QA合計: {single_total_time:.2f}s (平均: {avg_single_time:.2f}s/doc)
+- Aggregate処理: {aggregate_time:.2f}s
+- 総実行時間: {total_time:.2f}s
+
+トークン使用量:
+- Single QA合計: {total_single_tokens:,} tokens
+- Aggregate: {aggregate_metadata.get('total_tokens', 0):,} tokens
+- 総計: {total_single_tokens + aggregate_metadata.get('total_tokens', 0):,} tokens
+
 処理対象文書:
 """
         
@@ -259,12 +278,19 @@ Aggregateトークン使用量: {aggregate_metadata.get('total_tokens', 'N/A')}
             'status': 'completed',
             'results': {
                 'single_qa_count': len(single_results),
-                'aggregate_tokens': aggregate_metadata.get('total_tokens'),
-                'total_processing_time': 'N/A'  # 実装時に計算
+                'total_single_tokens': total_single_tokens,
+                'aggregate_tokens': aggregate_metadata.get('total_tokens', 0),
+                'total_tokens': total_single_tokens + aggregate_metadata.get('total_tokens', 0),
+                'timing': {
+                    'single_qa_total_time': single_total_time,
+                    'single_qa_avg_time': avg_single_time,
+                    'aggregate_time': aggregate_time,
+                    'total_time': total_time
+                }
             }
         })
         
-        print(f"実行完了 - Run ID: {run_id}", file=sys.stderr)
+        print(f"実行完了 - Run ID: {run_id} (総実行時間: {total_time:.2f}s)", file=sys.stderr)
         return run_id
         
     except Exception as e:
@@ -287,11 +313,11 @@ def main():
         """
     )
     
-    parser.add_argument("question", help="質問内容")
+    parser.add_argument("question", nargs='?', help="質問内容")
     parser.add_argument("--single-template", default="baseline",
                        help="single_qa用プロンプトテンプレート (default: baseline)")
-    parser.add_argument("--aggregate-template", default="consensus", 
-                       help="aggregate用プロンプトテンプレート (default: consensus)")
+    parser.add_argument("--aggregate-template", default="baseline", 
+                       help="aggregate用プロンプトテンプレート (default: baseline)")
     parser.add_argument("--parallel", type=int, default=3,
                        help="並列実行数 (default: 3)")
     parser.add_argument("--subdir", action="append",
@@ -324,9 +350,21 @@ def main():
                 print(f"結果ファイルが見つかりません: {args.run_id}")
                 
         else:
+            # 質問の確認と input() による補完
+            question = args.question
+            if not question:
+                try:
+                    question = input("質問を入力してください: ").strip()
+                    if not question:
+                        print("質問が入力されませんでした。", file=sys.stderr)
+                        sys.exit(1)
+                except (EOFError, KeyboardInterrupt):
+                    print("\n処理をキャンセルしました。", file=sys.stderr)
+                    sys.exit(1)
+            
             # Map-Reduce実行
             run_id = run_aggregate_qa(
-                args.question, 
+                question, 
                 args.single_template,
                 args.aggregate_template,
                 args.parallel,

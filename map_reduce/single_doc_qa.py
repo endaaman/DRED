@@ -14,7 +14,9 @@
 import sys
 import argparse
 import json
+import time
 from pathlib import Path
+from typing import List, Dict
 
 
 def read_document(doc_path: str) -> str:
@@ -71,7 +73,8 @@ def load_prompt_template(template_name: str) -> str:
     return template_path.read_text(encoding='utf-8')
 
 
-def create_prompt(document: str, question: str, template_name: str = "baseline") -> str:
+def create_prompt(document: str, question: str, template_name: str = "baseline", 
+                 conversation_history: List[Dict[str, str]] = None) -> str:
     """
     テンプレートを使用して質問応答用のプロンプトを作成
     
@@ -79,11 +82,29 @@ def create_prompt(document: str, question: str, template_name: str = "baseline")
         document: ドキュメント内容
         question: 質問内容
         template_name: 使用するテンプレート名
+        conversation_history: 対話履歴のリスト
         
     Returns:
         str: LLMに送信するプロンプト
     """
     template = load_prompt_template(template_name)
+    
+    # 対話履歴がある場合は追加
+    if conversation_history:
+        history_text = "\n\n## 過去の質問と回答\n"
+        for i, exchange in enumerate(conversation_history, 1):
+            history_text += f"\n**質問{i}**: {exchange['question']}\n"
+            history_text += f"**回答{i}**: {exchange['answer']}\n"
+        
+        # テンプレートに履歴を挿入
+        base_prompt = template.format(document=document, question=question)
+        # ドキュメント部分の後に履歴を挿入
+        if "---" in base_prompt:
+            parts = base_prompt.split("---", 1)
+            return parts[0] + history_text + "\n\n---" + parts[1]
+        else:
+            return base_prompt + history_text
+    
     return template.format(document=document, question=question)
 
 
@@ -171,7 +192,8 @@ def query_llm(prompt: str, model: str = "mistral-nemo-jp") -> tuple[str, dict]:
             raise Exception(f"LLMクエリ中にエラーが発生しました: {e}")
 
 
-def single_document_qa(doc_path: str, question: str, template_name: str = "baseline") -> dict:
+def single_document_qa(doc_path: str, question: str, template_name: str = "baseline", 
+                      conversation_history: List[Dict[str, str]] = None) -> dict:
     """
     単一ドキュメントに対する質問応答を実行
     
@@ -192,19 +214,32 @@ def single_document_qa(doc_path: str, question: str, template_name: str = "basel
         FileNotFoundError: ドキュメントファイルが見つからない場合
         Exception: その他のエラー
     """
+    start_time = time.time()
+    
     try:
         # ドキュメント読み込み
+        doc_start = time.time()
         document = read_document(doc_path)
+        doc_time = time.time() - doc_start
+        
         if not globals().get('_SILENT_MODE', False):
-            print(f"ドキュメント読み込み完了: {len(document)} 文字", file=sys.stderr)
+            print(f"ドキュメント読み込み完了: {len(document)} 文字 ({doc_time:.2f}s)", file=sys.stderr)
         
         # プロンプト作成
-        prompt = create_prompt(document, question, template_name)
+        prompt_start = time.time()
+        prompt = create_prompt(document, question, template_name, conversation_history)
+        prompt_time = time.time() - prompt_start
+        
         if not globals().get('_SILENT_MODE', False):
-            print(f"プロンプト作成完了: {len(prompt)} 文字 (テンプレート: {template_name})", file=sys.stderr)
+            print(f"プロンプト作成完了: {len(prompt)} 文字 (テンプレート: {template_name}, {prompt_time:.2f}s)", file=sys.stderr)
         
         # LLMクエリ実行
+        llm_start = time.time()
         answer, llm_metadata = query_llm(prompt)
+        llm_time = time.time() - llm_start
+        
+        # 総実行時間計算
+        total_time = time.time() - start_time
         
         # 結果を辞書として構築
         result = {
@@ -215,14 +250,82 @@ def single_document_qa(doc_path: str, question: str, template_name: str = "basel
             "metadata": {
                 "document_length": len(document),
                 "prompt_length": len(prompt),
+                "timing": {
+                    "document_load_time": doc_time,
+                    "prompt_creation_time": prompt_time,
+                    "llm_query_time": llm_time,
+                    "total_time": total_time
+                },
                 **llm_metadata
             }
         }
+        
+        if not globals().get('_SILENT_MODE', False):
+            print(f"処理完了: 総実行時間 {total_time:.2f}s (LLM: {llm_time:.2f}s)", file=sys.stderr)
         
         return result
         
     except Exception as e:
         raise Exception(f"処理中にエラーが発生しました: {e}")
+
+
+def interactive_mode(doc_path: str, template_name: str = "baseline"):
+    """
+    対話継続モード
+    
+    Args:
+        doc_path: ドキュメントファイルのパス
+        template_name: 使用するプロンプトテンプレート名
+    """
+    print("=" * 60)
+    print(f"対話モード開始")
+    print(f"ドキュメント: {doc_path}")
+    print(f"テンプレート: {template_name}")
+    print("=" * 60)
+    print("質問を入力してください。終了するには 'quit', 'exit', 'q' を入力してください。")
+    print()
+    
+    conversation_history = []
+    
+    try:
+        while True:
+            # 質問入力
+            try:
+                question = input("質問> ").strip()
+            except (EOFError, KeyboardInterrupt):
+                print("\n対話を終了します。")
+                break
+            
+            if not question:
+                continue
+                
+            if question.lower() in ['quit', 'exit', 'q']:
+                print("対話を終了します。")
+                break
+            
+            # 質問応答実行
+            try:
+                result = single_document_qa(doc_path, question, template_name, conversation_history)
+                answer = result['answer']
+                
+                # 回答表示
+                print(f"\n回答> {answer}\n")
+                
+                # 履歴に追加
+                conversation_history.append({
+                    'question': question,
+                    'answer': answer
+                })
+                
+                # 履歴が長くなりすぎたら古いものを削除（最新5件まで保持）
+                if len(conversation_history) > 5:
+                    conversation_history = conversation_history[-5:]
+                    
+            except Exception as e:
+                print(f"\nエラーが発生しました: {e}\n")
+                
+    except Exception as e:
+        print(f"\n予期しないエラー: {e}")
 
 
 def main():
@@ -245,6 +348,8 @@ def main():
                        help="利用可能なテンプレート一覧を表示")
     parser.add_argument("--format", choices=["text", "json"], default="text",
                        help="出力形式 (default: text)")
+    parser.add_argument("-i", "--interactive", action="store_true",
+                       help="対話継続モード")
     
     args = parser.parse_args()
     
@@ -257,9 +362,31 @@ def main():
             print(f"  - {template}")
         return
     
-    # 必須引数の確認
-    if not args.document or not args.question:
-        parser.error("document and question are required unless --list-templates is used")
+    # 対話モードの場合
+    if args.interactive:
+        if not args.document:
+            parser.error("document is required for interactive mode")
+        interactive_mode(args.document, args.template)
+        return
+    
+    # 引数の確認と input() による補完
+    if not args.document:
+        if not args.list_templates:
+            parser.error("document is required unless --list-templates is used")
+    
+    if not args.question and not args.interactive:
+        if args.document:
+            # documentはあるがquestionがない場合はinput()で取得
+            try:
+                args.question = input("質問を入力してください: ").strip()
+                if not args.question:
+                    print("質問が入力されませんでした。", file=sys.stderr)
+                    sys.exit(1)
+            except (EOFError, KeyboardInterrupt):
+                print("\n処理をキャンセルしました。", file=sys.stderr)
+                sys.exit(1)
+        else:
+            parser.error("question is required unless --interactive mode is used")
     
     try:
         # 質問応答実行
@@ -286,6 +413,13 @@ def main():
                 if 'total_tokens' in metadata:
                     print(f"  使用トークン: {metadata['total_tokens']:,} tokens")
                     print(f"  残りコンテキスト: {metadata.get('remaining_tokens', 'N/A'):,} tokens")
+                if 'timing' in metadata:
+                    timing = metadata['timing']
+                    print(f"  実行時間:")
+                    print(f"    ドキュメント読み込み: {timing['document_load_time']:.2f}s")
+                    print(f"    プロンプト作成: {timing['prompt_creation_time']:.2f}s")
+                    print(f"    LLM処理: {timing['llm_query_time']:.2f}s")
+                    print(f"    総実行時間: {timing['total_time']:.2f}s")
         
     except Exception as e:
         print(f"エラー: {e}", file=sys.stderr)
