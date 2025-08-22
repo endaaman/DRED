@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 import pandas as pd
 import time
+import argparse
 
 def load_questions(excel_path: Path) -> list:
     """Excelファイルから質問列を読み込み"""
@@ -26,14 +27,24 @@ def load_questions(excel_path: Path) -> list:
         print(f"❌ エラー: {excel_path} の読み込みに失敗: {e}", file=sys.stderr)
         return []
 
-def run_aggregate_qa(question: str, run_id: str) -> bool:
+def run_aggregate_qa(question: str, run_id: str, single_template: str = "legal_sandwich", 
+                    aggregate_template: str = "focused", model: str = None) -> bool:
     """aggregate_qa.pyを実行"""
     cmd = [
         "uv", "run", "python", "map_reduce/aggregate_qa.py",
         "--parallel", "3",
-        "--force-run-id", run_id,
+        "--single-template", single_template,
+        "--aggregate-template", aggregate_template,
+        "--run-id", run_id,
         question
     ]
+    
+    # モデル指定がある場合は環境変数で渡す
+    env = None
+    if model:
+        import os
+        env = os.environ.copy()
+        env['OLLAMA_MODEL'] = model
     
     # 実行コマンドを表示（デバッグ用にコピペ可能）
     cmd_str = ' '.join([f'"{arg}"' if ' ' in arg else arg for arg in cmd])
@@ -45,7 +56,7 @@ def run_aggregate_qa(question: str, run_id: str) -> bool:
     
     try:
         # 進捗表示を見るためcapture_output=Falseに変更
-        result = subprocess.run(cmd, text=True)
+        result = subprocess.run(cmd, text=True, env=env)
         if result.returncode == 0:
             print(f"✅ 完了: {run_id}", file=sys.stderr)
             return True
@@ -58,6 +69,17 @@ def run_aggregate_qa(question: str, run_id: str) -> bool:
 
 def main():
     """メイン処理"""
+    parser = argparse.ArgumentParser(description="模範QA自動実行スクリプト")
+    parser.add_argument("--single-template", default="legal_sandwich", 
+                       help="Single QA用テンプレート (default: legal_sandwich)")
+    parser.add_argument("--aggregate-template", default="focused", 
+                       help="Aggregate用テンプレート (default: focused)")
+    parser.add_argument("--model", help="使用するモデル名 (環境変数OLLAMA_MODELで指定)")
+    parser.add_argument("--category", choices=["空き家", "立地適正化計画"], 
+                       help="実行するカテゴリを指定 (指定しない場合は全て実行)")
+    
+    args = parser.parse_args()
+    
     qa_dir = Path("data/QA")
     
     if not qa_dir.exists():
@@ -70,11 +92,19 @@ def main():
         "立地適正化計画": qa_dir / "QA_立地適正化計画.xlsx"
     }
     
+    # カテゴリフィルタがある場合
+    if args.category:
+        qa_files = {args.category: qa_files[args.category]}
+    
     total_count = 0
     success_count = 0
     
     print("=" * 60, file=sys.stderr)
     print("模範QA自動実行開始", file=sys.stderr)
+    print(f"Single Template: {args.single_template}", file=sys.stderr)
+    print(f"Aggregate Template: {args.aggregate_template}", file=sys.stderr)
+    if args.model:
+        print(f"Model: {args.model}", file=sys.stderr)
     print("=" * 60, file=sys.stderr)
     
     start_time = time.time()
@@ -97,7 +127,8 @@ def main():
             run_id = f"{category}_Q{i}"
             total_count += 1
             
-            if run_aggregate_qa(question, run_id):
+            if run_aggregate_qa(question, run_id, args.single_template, 
+                               args.aggregate_template, args.model):
                 success_count += 1
             
             # 短い休憩（Ollama負荷軽減）
