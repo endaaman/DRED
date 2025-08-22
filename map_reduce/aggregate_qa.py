@@ -72,12 +72,13 @@ def create_aggregate_prompt(question: str, single_results: List[Dict[str, Any]],
                 elif "**確度**:" in line:
                     confidence = line.split(':')[1].strip()
         
-        document_answers.append(f"""【ドキュメント: {subdir}/{filename}】
+        document_answers.append(f"""
+=== ドキュメント #{i+1}: {subdir}/{filename} ===
 関連度: {relevance}
 確度: {confidence}
 
 {answer}
----
+=== ドキュメント #{i+1} 終了 ===
 """)
     
     return template.format(
@@ -104,61 +105,28 @@ def run_single_qa_batch(documents: List[Dict[str, Any]], question: str,
     """
     def run_single_qa(doc_info, pbar=None):
         """単一ドキュメントでsingle_qaを実行"""
-        try:
-            # サイレントモードを設定（ログ混雑回避）
-            import single_doc_qa
-            single_doc_qa._SILENT_MODE = show_progress
-            
-            result = single_document_qa(doc_info['path'], question, template_name)
-            
-            # run_idが指定されていれば逐次保存
-            if run_id:
-                from execution_manager import ExecutionManager
-                exec_manager = ExecutionManager()
-                save_paths = exec_manager.save_single_qa_result(
-                    run_id, doc_info['index'], Path(doc_info['path']), result
-                )
-                if pbar:
-                    pbar.set_postfix_str(f"保存: {doc_info['filename'][:15]}...")
-            
+        # サイレントモードを設定（ログ混雑回避）
+        import single_doc_qa
+        single_doc_qa._SILENT_MODE = True
+        
+        # Single QA実行
+        result = single_document_qa(doc_info['path'], question, template_name)
+        
+        # run_idが指定されていれば逐次保存
+        if run_id:
+            from execution_manager import ExecutionManager
+            exec_manager = ExecutionManager()
+            save_paths = exec_manager.save_single_qa_result(
+                run_id, doc_info['index'], Path(doc_info['path']), result
+            )
             if pbar:
-                pbar.set_postfix_str(f"{doc_info['filename'][:20]}...")
-                pbar.update(1)
-            
-            return result
-        except Exception as e:
-            if pbar:
-                pbar.set_postfix_str(f"ERROR: {doc_info['filename'][:15]}...")
-                pbar.update(1)
-            
-            # デバッグ: 実際のエラーをrun_id直下に出力
-            if run_id:
-                from execution_manager import ExecutionManager
-                exec_manager = ExecutionManager()
-                run_dir = exec_manager.get_run_dir(run_id)
-                error_file = run_dir / "single_qa_error_debug.txt"
-            else:
-                error_file = Path("single_qa_error_debug.txt")
-            error_content = f"""{'='*80}
-SINGLE QA ERROR DEBUG
-Document: {doc_info['path']}
-Error: {str(e)}
-Error Type: {type(e).__name__}
-{'='*80}
-
-"""
-            if error_file.exists():
-                error_content = error_file.read_text(encoding='utf-8') + error_content
-            error_file.write_text(error_content, encoding='utf-8')
-            
-            # エラー時はダミー結果を返す
-            return {
-                'document_path': doc_info['path'],
-                'question': question,
-                'template': template_name,
-                'answer': f"エラー: {str(e)}",
-                'metadata': {'error': True}
-            }
+                pbar.set_postfix_str(f"保存: {doc_info['filename'][:15]}...")
+        
+        if pbar:
+            pbar.set_postfix_str(f"{doc_info['filename'][:20]}...")
+            pbar.update(1)
+        
+        return result
     
     results = []
     
@@ -199,7 +167,7 @@ Error Type: {type(e).__name__}
 
 
 def _setup_execution(question: str, single_template: str, aggregate_template: str,
-                    parallel: int, subdir_filter: List[str], force_run_id: str = None) -> tuple[ExecutionManager, str, List[Dict[str, Any]]]:
+                    parallel: int, subdir_filter: List[str], run_id: str = None) -> tuple[ExecutionManager, str, List[Dict[str, Any]]]:
     """
     実行環境のセットアップ
     
@@ -207,7 +175,7 @@ def _setup_execution(question: str, single_template: str, aggregate_template: st
         tuple: (exec_manager, run_id, documents)
     """
     exec_manager = ExecutionManager()
-    run_id = exec_manager.create_run(run_id=force_run_id)
+    run_id = exec_manager.create_run(run_id=run_id)
     
     print(f"実行開始 - Run ID: {run_id}", file=sys.stderr)
     
@@ -289,24 +257,25 @@ def _execute_aggregate_phase(question: str, single_results: List[Dict[str, Any]]
     try:
         aggregate_prompt = create_aggregate_prompt(question, single_results, aggregate_template)
         
-        # デバッグ: 完全なaggregateプロンプトをrun_id直下に保存
+        # デバッグ: document_answersの部分のみを出力
         if run_id:
             from execution_manager import ExecutionManager
             exec_manager = ExecutionManager()
             run_dir = exec_manager.get_run_dir(run_id)
-            debug_file = run_dir / "aggregate_prompt_debug.txt"
+            debug_file = run_dir / "aggregate_document_answers.txt"
         else:
-            debug_file = Path("aggregate_prompt_debug.txt")
-        debug_content = f"""{'='*80}
-=== AGGREGATE PROMPT DEBUG ===
-{'='*80}
-{aggregate_prompt}
-{'='*80}
-=== END AGGREGATE PROMPT ===
-{'='*80}
-"""
-        debug_file.write_text(debug_content, encoding='utf-8')
-        print(f"Aggregate prompt saved to: {debug_file.absolute()}", file=sys.stderr)
+            debug_file = Path("aggregate_document_answers.txt")
+        
+        # aggregate_promptから document_answers部分のみを抽出
+        start_marker = "=== DOCUMENT ANSWERS START ==="
+        end_marker = "=== DOCUMENT ANSWERS END ==="
+        start_idx = aggregate_prompt.find(start_marker)
+        end_idx = aggregate_prompt.find(end_marker)
+        
+        if start_idx != -1 and end_idx != -1:
+            document_answers_only = aggregate_prompt[start_idx:end_idx + len(end_marker)]
+            debug_file.write_text(document_answers_only, encoding='utf-8')
+            print(f"Document answers saved to: {debug_file.absolute()}", file=sys.stderr)
         
         # LLMでaggregate処理
         from single_doc_qa import query_llm
@@ -418,9 +387,93 @@ def _finalize_execution(exec_manager: ExecutionManager, run_id: str, question: s
         raise RuntimeError(f"実行結果保存エラー: {e}") from e
 
 
+def run_aggregate_only(run_id: str, aggregate_template: str = "focused") -> str:
+    """
+    既存のsingle QA結果からaggregate処理のみ実行
+    
+    Args:
+        run_id: 既存の実行ID
+        aggregate_template: aggregate用テンプレート
+        
+    Returns:
+        str: 実行ID（同じrun_id）
+    """
+    exec_manager = ExecutionManager()
+    
+    # 既存メタデータから質問を取得
+    metadata = exec_manager.load_metadata(run_id)
+    question = metadata['parameters']['question']
+    
+    # 既存のsingle QA結果を読み込み
+    single_results = exec_manager.load_single_qa_results(run_id)
+    
+    print(f"既存のsingle QA結果 {len(single_results)} 件を読み込み", file=sys.stderr)
+    
+    # Aggregate処理のみ実行
+    aggregate_answer, aggregate_metadata, aggregate_time = _execute_aggregate_phase(
+        question, single_results, aggregate_template, run_id
+    )
+    
+    # 統計情報計算
+    avg_single_time, total_single_tokens = _calculate_statistics(single_results)
+    
+    # Aggregate結果の作成
+    aggregate_result = f"""=== MAP-REDUCE質問応答結果 ===
+
+実行ID: {run_id}
+実行日時: {datetime.now().isoformat()}
+
+質問: {question}
+
+パラメータ:
+- Single Template: {metadata['parameters']['single_template']}
+- Aggregate Template: {aggregate_template}  
+- 並列数: {metadata['parameters']['parallel']}
+- 対象文書数: {len(single_results)}
+
+=== 統合回答 ===
+
+{aggregate_answer}
+
+=== 実行統計 ===
+
+実行時間:
+- Single QA合計: {metadata.get('results', {}).get('timing', {}).get('single_qa_total_time', 0):.2f}s (再利用)
+- Aggregate処理: {aggregate_time:.2f}s
+- 総実行時間: {aggregate_time:.2f}s
+
+トークン使用量:
+- Single QA合計: {total_single_tokens:,} tokens (再利用)
+- Aggregate: {aggregate_metadata.get('total_tokens', 0):,} tokens
+- 総計: {total_single_tokens + aggregate_metadata.get('total_tokens', 0):,} tokens
+
+処理対象文書:
+"""
+    
+    # ドキュメント一覧を追加
+    for i, result in enumerate(single_results):
+        doc_path = Path(result['document_path'])
+        subdir = doc_path.parts[-2] if len(doc_path.parts) >= 2 else "root"
+        filename = doc_path.stem
+        aggregate_result += f"  {i:2d}: {subdir}/{filename}\n"
+    
+    # 結果保存
+    exec_manager.save_aggregate_result(run_id, aggregate_result)
+    
+    # メタデータ更新
+    exec_manager.update_metadata(run_id, {
+        'aggregate_template': aggregate_template,
+        'aggregate_time': aggregate_time,
+        'aggregate_tokens': aggregate_metadata.get('total_tokens', 0)
+    })
+    
+    print(f"Aggregate-only実行完了 - Run ID: {run_id} (実行時間: {aggregate_time:.2f}s)", file=sys.stderr)
+    return run_id
+
+
 def run_aggregate_qa(question: str, single_template: str = "focused",
                     aggregate_template: str = "focused", parallel: int = 3,
-                    subdir_filter: List[str] = None, force_run_id: str = None) -> str:
+                    subdir_filter: List[str] = None, run_id: str = None) -> str:
     """
     Map-Reduce質問応答の完全実行
     
@@ -430,6 +483,7 @@ def run_aggregate_qa(question: str, single_template: str = "focused",
         aggregate_template: aggregate用テンプレート
         parallel: 並列実行数
         subdir_filter: 対象サブディレクトリフィルタ
+        run_id: 実行ID（Noneの場合は自動生成）
         
     Returns:
         str: 実行ID
@@ -438,7 +492,7 @@ def run_aggregate_qa(question: str, single_template: str = "focused",
     
     # Phase 1: 実行環境セットアップ
     exec_manager, run_id, documents = _setup_execution(
-        question, single_template, aggregate_template, parallel, subdir_filter, force_run_id
+        question, single_template, aggregate_template, parallel, subdir_filter, run_id
     )
     
     try:
@@ -497,37 +551,42 @@ def main():
                        help="並列実行数 (default: 3)")
     parser.add_argument("--subdir", action="append",
                        help="対象サブディレクトリ（複数指定可）")
-    parser.add_argument("--force-run-id",
-                       help="実行IDを強制指定")
     parser.add_argument("--run-id", 
-                       help="既存の実行結果を表示")
-    parser.add_argument("--list-runs", action="store_true",
-                       help="実行履歴一覧を表示")
+                       help="実行ID（存在する場合はaggregate-only、存在しない場合は新規実行）")
+    parser.add_argument("--aggregate-only", action="store_true",
+                       help="run-idが指定されている場合、強制的にaggregate-only実行")
     
     args = parser.parse_args()
     
     try:
-        if args.list_runs:
-            # 実行履歴表示
-            exec_manager = ExecutionManager()
-            runs = exec_manager.list_runs()
-            print("実行履歴:")
-            for run_id in runs:
-                summary = exec_manager.get_run_summary(run_id)
-                print(f"  {run_id}: {summary['status']} "
-                      f"({summary['single_qa_count']} docs)")
-                      
-        elif args.run_id:
-            # 既存結果表示
-            exec_manager = ExecutionManager()
-            result_path = exec_manager.get_run_dir(args.run_id) / "aggregate_result.txt"
-            if result_path.exists():
-                print(result_path.read_text(encoding='utf-8'))
+        exec_manager = ExecutionManager()
+        
+        if args.run_id:
+            # run_id指定時の処理
+            if exec_manager.run_exists(args.run_id) or args.aggregate_only:
+                # 既存run_idからaggregate-only実行（--aggregate-onlyが指定されている場合は強制）
+                print(f"既存run_id {args.run_id} を使用してaggregate-only実行", file=sys.stderr)
+                run_id = run_aggregate_only(args.run_id, args.aggregate_template)
             else:
-                print(f"結果ファイルが見つかりません: {args.run_id}")
+                # 存在しないrun_idで新規実行
+                question = args.question
+                if not question:
+                    try:
+                        question = input("質問を入力してください: ").strip()
+                        if not question:
+                            print("質問が入力されませんでした。", file=sys.stderr)
+                            sys.exit(1)
+                    except (EOFError, KeyboardInterrupt):
+                        print("\n処理をキャンセルしました。", file=sys.stderr)
+                        sys.exit(1)
                 
+                print(f"run_id {args.run_id} で新規実行", file=sys.stderr)
+                run_id = run_aggregate_qa(
+                    question, args.single_template, args.aggregate_template,
+                    args.parallel, args.subdir, args.run_id
+                )
         else:
-            # 質問の確認と input() による補完
+            # run_id未指定時の新規実行
             question = args.question
             if not question:
                 try:
@@ -539,20 +598,17 @@ def main():
                     print("\n処理をキャンセルしました。", file=sys.stderr)
                     sys.exit(1)
             
-            # Map-Reduce実行
+            # 自動incrementでrun_id生成
+            auto_run_id = exec_manager.get_next_run_id()
+            print(f"自動生成run_id {auto_run_id} で新規実行", file=sys.stderr)
             run_id = run_aggregate_qa(
-                question, 
-                args.single_template,
-                args.aggregate_template,
-                args.parallel,
-                args.subdir,
-                args.force_run_id
+                question, args.single_template, args.aggregate_template,
+                args.parallel, args.subdir, auto_run_id
             )
-            
-            # 結果表示
-            exec_manager = ExecutionManager()
-            result_path = exec_manager.get_run_dir(run_id) / "aggregate_result.txt"
-            print(result_path.read_text(encoding='utf-8'))
+        
+        # 結果表示
+        result_path = exec_manager.get_run_dir(run_id) / "aggregate_result.txt"
+        print(result_path.read_text(encoding='utf-8'))
             
     except Exception as e:
         print(f"エラー: {e}", file=sys.stderr)

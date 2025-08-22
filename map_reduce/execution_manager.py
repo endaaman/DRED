@@ -100,6 +100,43 @@ class ExecutionManager:
                 runs.append(path.name)
         return sorted(runs)
     
+    def run_exists(self, run_id: str) -> bool:
+        """指定されたrun_idが存在するかチェック"""
+        return self.get_run_dir(run_id).exists() and (self.get_run_dir(run_id) / "metadata.json").exists()
+    
+    def get_next_run_id(self) -> str:
+        """既存run_idの最大値をincrementして新しいrun_idを生成"""
+        existing_runs = self.list_runs()
+        if not existing_runs:
+            return self._generate_run_id()
+        
+        # 日付_連番形式のrun_idから最大の連番を取得
+        today = datetime.now().strftime("%Y-%m-%d")
+        max_counter = 0
+        
+        for run_id in existing_runs:
+            if run_id.startswith(today + "_"):
+                try:
+                    counter = int(run_id.split("_")[-1])
+                    max_counter = max(max_counter, counter)
+                except ValueError:
+                    continue
+        
+        return f"{today}_{max_counter + 1:04d}"
+    
+    def load_single_qa_results(self, run_id: str) -> List[Dict[str, Any]]:
+        """指定されたrun_idのsingle QA結果を全て読み込み"""
+        single_qa_dir = self.get_run_dir(run_id) / "single_qa"
+        if not single_qa_dir.exists():
+            raise FileNotFoundError(f"Single QA results not found for run_id: {run_id}")
+        
+        results = []
+        for json_file in sorted(single_qa_dir.glob("*.json")):
+            with open(json_file, 'r', encoding='utf-8') as f:
+                results.append(json.load(f))
+        
+        return results
+    
     def save_metadata(self, run_id: str, metadata: Dict[str, Any]) -> None:
         """メタデータをファイルに保存"""
         metadata_path = self.get_run_dir(run_id) / "metadata.json"
@@ -180,12 +217,15 @@ class ExecutionManager:
             if 'metadata' in result:
                 metadata = result['metadata']
                 f.write(f"=== 実行情報 ===\n\n")
-                f.write(f"ドキュメント長: {metadata.get('document_length', 'N/A'):,} 文字\n")
-                f.write(f"プロンプト長: {metadata.get('prompt_length', 'N/A'):,} 文字\n")
+                doc_len = metadata.get('document_length', 0)
+                f.write(f"ドキュメント長: {doc_len:,} 文字\n")
+                prompt_len = metadata.get('prompt_length', 0)
+                f.write(f"プロンプト長: {prompt_len:,} 文字\n")
                 
                 if 'total_tokens' in metadata:
                     f.write(f"使用トークン: {metadata['total_tokens']:,} tokens\n")
-                    f.write(f"残りコンテキスト: {metadata.get('remaining_tokens', 'N/A'):,} tokens\n")
+                    remaining = metadata.get('remaining_tokens', 0)
+                    f.write(f"残りコンテキスト: {remaining:,} tokens\n")
                 
                 if 'timing' in metadata:
                     timing = metadata['timing']

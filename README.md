@@ -39,31 +39,38 @@ uv run python map_reduce/single_doc_qa.py -i "data/空き家/空き家ガイド�
 
 ### 2. Map-Reduce質問応答 (Aggregate QA)
 
+#### 新規実行（Single QA + Aggregate）
+
 ```bash
-# 基本実行（全文書対象）
+# 基本実行（run_id自動生成）
 uv run python map_reduce/aggregate_qa.py "３年前に家を相続した。売却のため、土地の上の建屋を取り壊したい。利用出来る支援金等は何かあるか？"
 
 # テンプレートと並列数を指定
 uv run python map_reduce/aggregate_qa.py "空き家の管理に関する支援制度を教えて" \
-  --single-template structured \
-  --aggregate-template consensus \
+  --single-template legal_sandwich \
+  --aggregate-template sandwich \
   --parallel 2
 
-# 特定サブディレクトリのみを対象
+# 特定run_idで新規実行
 uv run python map_reduce/aggregate_qa.py "立地適正化計画の策定手順は？" \
-  --subdir 立地適正化計画 \
-  --parallel 3
+  --run-id my-test-001 \
+  --single-template structured
 ```
 
-### 3. 実行管理・履歴確認
+#### 既存結果からAggregate-Only実行
 
 ```bash
-# 実行履歴一覧
-uv run python map_reduce/aggregate_qa.py --list-runs
+# 既存のsingle QA結果を使って別のaggregateテンプレートを試す
+uv run python map_reduce/aggregate_qa.py --run-id 2025-08-23_0007 --aggregate-template focused
+uv run python map_reduce/aggregate_qa.py --run-id 2025-08-23_0007 --aggregate-template sandwich
 
-# 特定実行結果の確認
-uv run python map_reduce/aggregate_qa.py --run-id 2025-08-25_0001
+# 存在しないrun_idを指定した場合は新規実行
+uv run python map_reduce/aggregate_qa.py "新しい質問" --run-id nonexistent-id --single-template legal_sandwich
+```
 
+### 3. 文書インデックス確認
+
+```bash
 # 文書インデックス確認
 uv run python map_reduce/document_indexer.py --stats
 ```
@@ -85,14 +92,15 @@ run/
 ## プロンプトテンプレート
 
 ### Single QA用
-- `baseline`: シンプルな基本形
+- `focused`: シンプルで高速
+- `legal_sandwich`: 法的文書に特化した詳細分析（推奨）
 - `structured`: 構造化回答形式  
-- `qualitative`: 市民相談員の視点
-- `strict`: 厳密検証アプローチ
+- `baseline`: シンプルな基本形
 
 ### Aggregate QA用
+- `sandwich`: 情報統合に特化（推奨）
+- `focused`: シンプルな統合
 - `baseline`: シンプルな統合形式
-- `consensus`: 専門統合アナリストによる包括回答
 
 ## システム特徴
 
