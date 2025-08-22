@@ -62,21 +62,11 @@ def create_aggregate_prompt(question: str, single_results: List[Dict[str, Any]],
         
         answer = result['answer']
         
-        # structured形式の回答から関連度と確度を抽出
-        relevance = "不明"
-        confidence = "不明"
-        if "**関連度**:" in answer:
-            for line in answer.split('\n'):
-                if "**関連度**:" in line:
-                    relevance = line.split(':')[1].strip()
-                elif "**確度**:" in line:
-                    confidence = line.split(':')[1].strip()
+        # 関連度と確度の抽出は不要 - 回答内容をそのまま使用
+        # 各single QAの回答に既に含まれているため
         
         document_answers.append(f"""
 === ドキュメント #{i+1}: {subdir}/{filename} ===
-関連度: {relevance}
-確度: {confidence}
-
 {answer}
 === ドキュメント #{i+1} 終了 ===
 """)
