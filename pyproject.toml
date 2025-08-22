@@ -1,0 +1,9 @@
+[project]
+name = "dred"
+version = "0.1.0"
+description = "行政文書RAGシステム - Map-Reduce方式によるドキュメント質問応答"
+requires-python = ">=3.12"
+dependencies = [
+    "ollama>=0.3.0",
+    "tqdm>=4.66.0",
+]
