@@ -177,9 +177,9 @@ def query_llm(prompt: str, model: str = None):
             
             if not globals().get('_SILENT_MODE', False):
                 print(f"トークン使用量:", file=sys.stderr)
-                print(f"  プロンプト: {prompt_tokens:,} tokens", file=sys.stderr)
-                print(f"  回答生成: {completion_tokens:,} tokens", file=sys.stderr)
-                print(f"  合計: {total_tokens:,} tokens", file=sys.stderr)
+                print(f"  プロンプト: {prompt_tokens} tokens", file=sys.stderr)
+                print(f"  回答生成: {completion_tokens} tokens", file=sys.stderr)
+                print(f"  合計: {total_tokens} tokens", file=sys.stderr)
             
             # モデルのコンテキスト長から残りトークンを推定
             context_lengths = {
@@ -194,7 +194,7 @@ def query_llm(prompt: str, model: str = None):
                 metadata["remaining_tokens"] = remaining_tokens
                 metadata["context_usage_percent"] = (prompt_tokens / max_tokens) * 100
                 if not globals().get('_SILENT_MODE', False):
-                    print(f"  残りコンテキスト: {remaining_tokens:,} tokens ({remaining_tokens/max_tokens*100:.1f}%)", file=sys.stderr)
+                    print(f"  残りコンテキスト: {remaining_tokens} tokens ({remaining_tokens/max_tokens*100:.1f}%)", file=sys.stderr)
         
         if "response" in response:
             return response["response"].strip(), metadata
@@ -424,11 +424,11 @@ def main():
                 print("\n" + "=" * 60)
                 print("実行情報:")
                 metadata = result['metadata']
-                print(f"  ドキュメント長: {metadata.get('document_length', 'N/A'):,} 文字")
-                print(f"  プロンプト長: {metadata.get('prompt_length', 'N/A'):,} 文字")
+                print(f"  ドキュメント長: {metadata.get('document_length', 'N/A')} 文字")
+                print(f"  プロンプト長: {metadata.get('prompt_length', 'N/A')} 文字")
                 if 'total_tokens' in metadata:
-                    print(f"  使用トークン: {metadata['total_tokens']:,} tokens")
-                    print(f"  残りコンテキスト: {metadata.get('remaining_tokens', 'N/A'):,} tokens")
+                    print(f"  使用トークン: {metadata['total_tokens']} tokens")
+                    print(f"  残りコンテキスト: {metadata.get('remaining_tokens', 'N/A')} tokens")
                 if 'timing' in metadata:
                     timing = metadata['timing']
                     print(f"  実行時間:")

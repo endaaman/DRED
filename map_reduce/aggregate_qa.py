@@ -131,6 +131,26 @@ def run_single_qa_batch(documents: List[Dict[str, Any]], question: str,
                 pbar.set_postfix_str(f"ERROR: {doc_info['filename'][:15]}...")
                 pbar.update(1)
             
+            # デバッグ: 実際のエラーをrun_id直下に出力
+            if run_id:
+                from execution_manager import ExecutionManager
+                exec_manager = ExecutionManager()
+                run_dir = exec_manager.get_run_dir(run_id)
+                error_file = run_dir / "single_qa_error_debug.txt"
+            else:
+                error_file = Path("single_qa_error_debug.txt")
+            error_content = f"""{'='*80}
+SINGLE QA ERROR DEBUG
+Document: {doc_info['path']}
+Error: {str(e)}
+Error Type: {type(e).__name__}
+{'='*80}
+
+"""
+            if error_file.exists():
+                error_content = error_file.read_text(encoding='utf-8') + error_content
+            error_file.write_text(error_content, encoding='utf-8')
+            
             # エラー時はダミー結果を返す
             return {
                 'document_path': doc_info['path'],
@@ -256,7 +276,7 @@ def _execute_single_qa_phase(exec_manager: ExecutionManager, run_id: str,
 
 
 def _execute_aggregate_phase(question: str, single_results: List[Dict[str, Any]],
-                           aggregate_template: str) -> tuple[str, Dict[str, Any], float]:
+                           aggregate_template: str, run_id: str = None) -> tuple[str, Dict[str, Any], float]:
     """
     Aggregate フェーズの実行
     
@@ -268,6 +288,25 @@ def _execute_aggregate_phase(question: str, single_results: List[Dict[str, Any]]
     
     try:
         aggregate_prompt = create_aggregate_prompt(question, single_results, aggregate_template)
+        
+        # デバッグ: 完全なaggregateプロンプトをrun_id直下に保存
+        if run_id:
+            from execution_manager import ExecutionManager
+            exec_manager = ExecutionManager()
+            run_dir = exec_manager.get_run_dir(run_id)
+            debug_file = run_dir / "aggregate_prompt_debug.txt"
+        else:
+            debug_file = Path("aggregate_prompt_debug.txt")
+        debug_content = f"""{'='*80}
+=== AGGREGATE PROMPT DEBUG ===
+{'='*80}
+{aggregate_prompt}
+{'='*80}
+=== END AGGREGATE PROMPT ===
+{'='*80}
+"""
+        debug_file.write_text(debug_content, encoding='utf-8')
+        print(f"Aggregate prompt saved to: {debug_file.absolute()}", file=sys.stderr)
         
         # LLMでaggregate処理
         from single_doc_qa import query_llm
@@ -410,7 +449,7 @@ def run_aggregate_qa(question: str, single_template: str = "focused",
         
         # Phase 3: Aggregate実行
         aggregate_answer, aggregate_metadata, aggregate_time = _execute_aggregate_phase(
-            question, single_results, aggregate_template
+            question, single_results, aggregate_template, run_id
         )
         
         # Phase 4: 結果の最終化
