@@ -49,12 +49,36 @@ def create_aggregate_prompt(question: str, single_results: List[Dict[str, Any]],
     
     template = template_path.read_text(encoding='utf-8')
     
-    # 各文書の回答を整理
+    # 各文書の回答を整理（ドキュメント情報を完全保持）
     document_answers = []
     for i, result in enumerate(single_results):
-        doc_name = Path(result['document_path']).stem
+        doc_path = Path(result['document_path'])
+        # サブディレクトリ/ファイル名の形式で表示
+        filename = doc_path.stem
+        if len(doc_path.parts) >= 2:
+            subdir = doc_path.parts[-2]
+        else:
+            subdir = "root"
+        
         answer = result['answer']
-        document_answers.append(f"【文書{i+1}: {doc_name}】\n{answer}\n")
+        
+        # structured形式の回答から関連度と確度を抽出
+        relevance = "不明"
+        confidence = "不明"
+        if "**関連度**:" in answer:
+            for line in answer.split('\n'):
+                if "**関連度**:" in line:
+                    relevance = line.split(':')[1].strip()
+                elif "**確度**:" in line:
+                    confidence = line.split(':')[1].strip()
+        
+        document_answers.append(f"""【ドキュメント: {subdir}/{filename}】
+関連度: {relevance}
+確度: {confidence}
+
+{answer}
+---
+""")
     
     return template.format(
         question=question,
@@ -154,26 +178,16 @@ def run_single_qa_batch(documents: List[Dict[str, Any]], question: str,
     return results
 
 
-def run_aggregate_qa(question: str, single_template: str = "baseline",
-                    aggregate_template: str = "baseline", parallel: int = 3,
-                    subdir_filter: List[str] = None) -> str:
+def _setup_execution(question: str, single_template: str, aggregate_template: str,
+                    parallel: int, subdir_filter: List[str], force_run_id: str = None) -> tuple[ExecutionManager, str, List[Dict[str, Any]]]:
     """
-    Map-Reduce質問応答の完全実行
+    実行環境のセットアップ
     
-    Args:
-        question: 質問内容
-        single_template: single_qa用テンプレート
-        aggregate_template: aggregate用テンプレート
-        parallel: 並列実行数
-        subdir_filter: 対象サブディレクトリフィルタ
-        
     Returns:
-        str: 実行ID
+        tuple: (exec_manager, run_id, documents)
     """
-    # 実行管理開始
-    start_time = time.time()
     exec_manager = ExecutionManager()
-    run_id = exec_manager.create_run()
+    run_id = exec_manager.create_run(run_id=force_run_id)
     
     print(f"実行開始 - Run ID: {run_id}", file=sys.stderr)
     
@@ -188,7 +202,7 @@ def run_aggregate_qa(question: str, single_template: str = "baseline",
         
         print(f"対象ドキュメント数: {len(documents)}", file=sys.stderr)
         
-        # メタデータ更新
+        # メタデータ初期化
         exec_manager.update_metadata(run_id, {
             'status': 'running',
             'parameters': {
@@ -202,40 +216,105 @@ def run_aggregate_qa(question: str, single_template: str = "baseline",
                          for doc in documents]
         })
         
-        # Single QA並列実行
-        print("Single QA実行開始...", file=sys.stderr)
-        single_start_time = time.time()
-        single_results = run_single_qa_batch(documents, question, single_template, parallel, True, run_id)
+        return exec_manager, run_id, documents
+        
+    except Exception as e:
+        # セットアップ段階でのエラー
+        exec_manager.update_metadata(run_id, {
+            'status': 'setup_failed',
+            'error': f"Setup error: {str(e)}"
+        })
+        raise RuntimeError(f"実行環境セットアップエラー: {e}") from e
+
+
+def _execute_single_qa_phase(exec_manager: ExecutionManager, run_id: str, 
+                            documents: List[Dict[str, Any]], question: str,
+                            single_template: str, parallel: int) -> tuple[List[Dict[str, Any]], float]:
+    """
+    Single QA フェーズの実行
+    
+    Returns:
+        tuple: (single_results, single_total_time)
+    """
+    print("Single QA実行開始...", file=sys.stderr)
+    single_start_time = time.time()
+    
+    try:
+        single_results = run_single_qa_batch(
+            documents, question, single_template, parallel, True, run_id
+        )
         single_total_time = time.time() - single_start_time
+        return single_results, single_total_time
         
-        # Single QA結果は並列実行中に逐次保存済み
-        
-        # Aggregate実行
-        print("Aggregate処理開始...", file=sys.stderr)
-        aggregate_start_time = time.time()
+    except Exception as e:
+        # Single QA段階でのエラー
+        exec_manager.update_metadata(run_id, {
+            'status': 'single_qa_failed',
+            'error': f"Single QA error: {str(e)}"
+        })
+        raise RuntimeError(f"Single QA実行エラー: {e}") from e
+
+
+def _execute_aggregate_phase(question: str, single_results: List[Dict[str, Any]],
+                           aggregate_template: str) -> tuple[str, Dict[str, Any], float]:
+    """
+    Aggregate フェーズの実行
+    
+    Returns:
+        tuple: (aggregate_answer, aggregate_metadata, aggregate_time)
+    """
+    print("Aggregate処理開始...", file=sys.stderr)
+    aggregate_start_time = time.time()
+    
+    try:
         aggregate_prompt = create_aggregate_prompt(question, single_results, aggregate_template)
         
         # LLMでaggregate処理
         from single_doc_qa import query_llm
         aggregate_answer, aggregate_metadata = query_llm(aggregate_prompt)
+        
         aggregate_time = time.time() - aggregate_start_time
+        return aggregate_answer, aggregate_metadata, aggregate_time
         
-        # 総実行時間計算
-        total_time = time.time() - start_time
+    except Exception as e:
+        raise RuntimeError(f"Aggregate処理エラー: {e}") from e
+
+
+def _calculate_statistics(single_results: List[Dict[str, Any]]) -> tuple[float, int]:
+    """
+    統計情報の計算
+    
+    Returns:
+        tuple: (avg_single_time, total_single_tokens)
+    """
+    single_timings = []
+    single_tokens = []
+    
+    for result in single_results:
+        if 'metadata' in result and 'timing' in result['metadata']:
+            single_timings.append(result['metadata']['timing']['total_time'])
+        if 'metadata' in result and 'total_tokens' in result['metadata']:
+            single_tokens.append(result['metadata']['total_tokens'])
+    
+    avg_single_time = sum(single_timings) / len(single_timings) if single_timings else 0
+    total_single_tokens = sum(single_tokens) if single_tokens else 0
+    
+    return avg_single_time, total_single_tokens
+
+
+def _finalize_execution(exec_manager: ExecutionManager, run_id: str, question: str,
+                       single_template: str, aggregate_template: str, parallel: int,
+                       documents: List[Dict[str, Any]], aggregate_answer: str,
+                       single_results: List[Dict[str, Any]], aggregate_metadata: Dict[str, Any],
+                       single_total_time: float, aggregate_time: float, total_time: float) -> None:
+    """
+    実行結果の最終化と保存
+    """
+    try:
+        # 統計情報計算
+        avg_single_time, total_single_tokens = _calculate_statistics(single_results)
         
-        # Single QA の統計情報を計算
-        single_timings = []
-        single_tokens = []
-        for result in single_results:
-            if 'metadata' in result and 'timing' in result['metadata']:
-                single_timings.append(result['metadata']['timing']['total_time'])
-            if 'metadata' in result and 'total_tokens' in result['metadata']:
-                single_tokens.append(result['metadata']['total_tokens'])
-        
-        avg_single_time = sum(single_timings) / len(single_timings) if single_timings else 0
-        total_single_tokens = sum(single_tokens) if single_tokens else 0
-        
-        # Aggregate結果保存
+        # Aggregate結果の作成
         aggregate_result = f"""=== MAP-REDUCE質問応答結果 ===
 
 実行ID: {run_id}
@@ -271,6 +350,7 @@ def run_aggregate_qa(question: str, single_template: str = "baseline",
         for doc in documents:
             aggregate_result += f"  {doc['index']:2d}: {doc['subdir']}/{doc['filename']}\n"
         
+        # 結果保存
         exec_manager.save_aggregate_result(run_id, aggregate_result)
         
         # メタデータ最終更新
@@ -290,15 +370,71 @@ def run_aggregate_qa(question: str, single_template: str = "baseline",
             }
         })
         
+    except Exception as e:
+        # 最終化段階でのエラー
+        exec_manager.update_metadata(run_id, {
+            'status': 'finalization_failed',
+            'error': f"Finalization error: {str(e)}"
+        })
+        raise RuntimeError(f"実行結果保存エラー: {e}") from e
+
+
+def run_aggregate_qa(question: str, single_template: str = "focused",
+                    aggregate_template: str = "focused", parallel: int = 3,
+                    subdir_filter: List[str] = None, force_run_id: str = None) -> str:
+    """
+    Map-Reduce質問応答の完全実行
+    
+    Args:
+        question: 質問内容
+        single_template: single_qa用テンプレート
+        aggregate_template: aggregate用テンプレート
+        parallel: 並列実行数
+        subdir_filter: 対象サブディレクトリフィルタ
+        
+    Returns:
+        str: 実行ID
+    """
+    start_time = time.time()
+    
+    # Phase 1: 実行環境セットアップ
+    exec_manager, run_id, documents = _setup_execution(
+        question, single_template, aggregate_template, parallel, subdir_filter, force_run_id
+    )
+    
+    try:
+        # Phase 2: Single QA実行
+        single_results, single_total_time = _execute_single_qa_phase(
+            exec_manager, run_id, documents, question, single_template, parallel
+        )
+        
+        # Phase 3: Aggregate実行
+        aggregate_answer, aggregate_metadata, aggregate_time = _execute_aggregate_phase(
+            question, single_results, aggregate_template
+        )
+        
+        # Phase 4: 結果の最終化
+        total_time = time.time() - start_time
+        _finalize_execution(
+            exec_manager, run_id, question, single_template, aggregate_template,
+            parallel, documents, aggregate_answer, single_results, aggregate_metadata,
+            single_total_time, aggregate_time, total_time
+        )
+        
         print(f"実行完了 - Run ID: {run_id} (総実行時間: {total_time:.2f}s)", file=sys.stderr)
         return run_id
         
     except Exception as e:
-        # エラー時の処理
-        exec_manager.update_metadata(run_id, {
-            'status': 'failed',
-            'error': str(e)
-        })
+        # 全体エラーハンドリング（セットアップ以外のエラー）
+        try:
+            exec_manager.update_metadata(run_id, {
+                'status': 'failed',
+                'error': str(e)
+            })
+        except Exception as meta_error:
+            print(f"メタデータ更新エラー: {meta_error}", file=sys.stderr)
+        
+        print(f"実行失敗 - Run ID: {run_id}: {e}", file=sys.stderr)
         raise e
 
 
@@ -314,14 +450,16 @@ def main():
     )
     
     parser.add_argument("question", nargs='?', help="質問内容")
-    parser.add_argument("--single-template", default="baseline",
-                       help="single_qa用プロンプトテンプレート (default: baseline)")
-    parser.add_argument("--aggregate-template", default="baseline", 
-                       help="aggregate用プロンプトテンプレート (default: baseline)")
+    parser.add_argument("--single-template", default="focused",
+                       help="single_qa用プロンプトテンプレート (default: focused)")
+    parser.add_argument("--aggregate-template", default="focused", 
+                       help="aggregate用プロンプトテンプレート (default: focused)")
     parser.add_argument("--parallel", type=int, default=3,
                        help="並列実行数 (default: 3)")
     parser.add_argument("--subdir", action="append",
                        help="対象サブディレクトリ（複数指定可）")
+    parser.add_argument("--force-run-id",
+                       help="実行IDを強制指定")
     parser.add_argument("--run-id", 
                        help="既存の実行結果を表示")
     parser.add_argument("--list-runs", action="store_true",
@@ -368,7 +506,8 @@ def main():
                 args.single_template,
                 args.aggregate_template,
                 args.parallel,
-                args.subdir
+                args.subdir,
+                args.force_run_id
             )
             
             # 結果表示

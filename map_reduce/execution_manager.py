@@ -39,6 +39,10 @@ class ExecutionManager:
         """
         if run_id is None:
             run_id = self._generate_run_id()
+        else:
+            # 指定されたrun_idの検証（スラッシュなど問題のある文字を禁止）
+            if "/" in run_id or "\\" in run_id:
+                raise ValueError(f"Invalid run_id: {run_id} (cannot contain / or \\)")
         
         run_dir = self.get_run_dir(run_id)
         run_dir.mkdir(parents=True, exist_ok=True)

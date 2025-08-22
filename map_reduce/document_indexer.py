@@ -17,7 +17,7 @@ import hashlib
 class DocumentIndexer:
     """ドキュメントインデックス作成クラス"""
     
-    def __init__(self, base_dir: str = "data"):
+    def __init__(self, base_dir: str = "data/要綱"):
         """
         Args:
             base_dir: ドキュメントベースディレクトリ
@@ -75,7 +75,8 @@ class DocumentIndexer:
         
         # サブディレクトリの取得
         if len(relative_path.parts) > 1:
-            subdir = relative_path.parts[-2]  # 親ディレクトリ名
+            # ファイルの親ディレクトリ名を取得（例: 空き家）
+            subdir = relative_path.parts[-2]
         else:
             subdir = "root"
         

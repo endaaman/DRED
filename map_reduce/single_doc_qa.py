@@ -133,8 +133,19 @@ def query_llm(prompt: str, model: str = "mistral-nemo-jp") -> tuple[str, dict]:
             model=model,
             prompt=prompt,
             options={
-                "temperature": 0.1,  # 一貫性のある回答のため低めに設定
-                "top_p": 0.9
+                "temperature": 0.4,        # 反復ループ防止のため適度なランダム性を確保
+                "top_p": 0.9,
+                "repeat_penalty": 1.1,     # 反復抑制: 同じ語句の繰り返しにペナルティ
+                "frequency_penalty": 0.1,  # 頻出語抑制: 頻繁に使われる語句にペナルティ
+                "num_predict": 2048,       # 最大生成トークン数制限で異常長出力を防止
+                # Stop sequences (必要時にコメントアウト解除)
+                # "stop": [
+                #     "---",
+                #     "## ",
+                #     "**関連度**:",     # 構造化プロンプトの繰り返し防止
+                #     "\n\n\n",          # 過度な改行の防止
+                #     "=== 回答 ===",    # セクション重複防止
+                # ]
             }
         )
         
@@ -341,8 +352,8 @@ def main():
     
     parser.add_argument("document", nargs='?', help="質問対象のドキュメントファイルパス")
     parser.add_argument("question", nargs='?', help="質問内容")
-    parser.add_argument("-t", "--template", default="baseline", 
-                       help="使用するプロンプトテンプレート (default: baseline)")
+    parser.add_argument("-t", "--template", default="focused", 
+                       help="使用するプロンプトテンプレート (default: focused)")
     parser.add_argument("-v", "--verbose", action="store_true", help="詳細な出力を表示")
     parser.add_argument("--list-templates", action="store_true", 
                        help="利用可能なテンプレート一覧を表示")
