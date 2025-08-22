@@ -108,7 +108,7 @@ def create_prompt(document: str, question: str, template_name: str = "baseline",
     return template.format(document=document, question=question)
 
 
-def query_llm(prompt: str, model: str = "mistral-nemo-jp") -> tuple[str, dict]:
+def query_llm(prompt: str, model: str = None):
     """
     Ollama公式ライブラリを使ってLLMに質問を投げて回答を取得
     
@@ -123,6 +123,11 @@ def query_llm(prompt: str, model: str = "mistral-nemo-jp") -> tuple[str, dict]:
         Exception: Ollamaとの通信でエラーが発生した場合
     """
     import ollama
+    import os
+    
+    # 環境変数からモデル名を取得、デフォルトは日本語特化Q4版
+    if model is None:
+        model = os.environ.get('OLLAMA_MODEL', 'mistral-nemo-jp-q4')
     
     try:
         # 並列実行時のログ混雑を避けるため、条件付きでログ出力
