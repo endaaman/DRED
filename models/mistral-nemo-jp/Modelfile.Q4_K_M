@@ -1,4 +1,7 @@
 FROM ./Mistral-Nemo-Japanese-Instruct-2408.Q4_K_M.gguf
+# PARAMETER num_ctx 128000
+PARAMETER num_ctx 64000
+
 #
 #
 # # Mistral Instructフォーマット
