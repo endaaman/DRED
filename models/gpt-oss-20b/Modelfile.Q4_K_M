@@ -1,0 +1,3 @@
+FROM gpt-oss-20b-Q4_K_M.gguf
+# PARAMETER num_ctx 128000
+PARAMETER temperature 1.0
