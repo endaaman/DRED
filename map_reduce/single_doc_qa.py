@@ -114,10 +114,10 @@ def create_prompt(document: str, question: str, template_name: str = "baseline",
 def get_model_context_length(model: str) -> int:
     """
     Ollamaからモデル情報を取得してコンテキスト長を返す
-    
+
     Args:
         model: Ollamaモデル名
-    
+
     Returns:
         int: コンテキスト長（取得失敗時はNone）
     """
@@ -132,13 +132,13 @@ def get_model_context_length(model: str) -> int:
                     parts = line.split()
                     if len(parts) >= 3:
                         return int(parts[2])
-        
+
         # modelinfoから直接取得を試みる
         if 'details' in model_info:
             if 'parameter_size' in model_info['details']:
                 # パラメータサイズから推定（これは正確ではないため、別の方法を優先）
                 pass
-        
+
         # デフォルト値を返す
         return None
     except Exception as e:
@@ -147,13 +147,15 @@ def get_model_context_length(model: str) -> int:
         return None
 
 
-def query_llm(prompt: str, model: str = None):
+def query_llm(prompt: str, model: str = None, num_ctx: int = None, num_predict: int = None):
     """
     Ollama公式ライブラリを使ってLLMに質問を投げて回答を取得
 
     Args:
         prompt: LLMに送信するプロンプト
         model: 使用するOllamaモデル名
+        num_ctx: コンテキスト長（手動指定する場合）
+        num_predict: 最大生成トークン数（手動指定する場合）
 
     Returns:
         tuple[str, dict]: (回答テキスト, メタデータ辞書)
@@ -166,29 +168,65 @@ def query_llm(prompt: str, model: str = None):
     if model is None:
         model = os.environ.get('OLLAMA_MODEL', 'mistral-nemo-jp-q4')
 
+    # 環境変数からnum_ctxを取得（引数で指定されていない場合）
+    if num_ctx is None:
+        env_num_ctx = os.environ.get('OLLAMA_NUM_CTX')
+        if env_num_ctx:
+            try:
+                num_ctx = int(env_num_ctx)
+                if not globals().get('_SILENT_MODE', False):
+                    print(f"環境変数OLLAMA_NUM_CTXから設定: {num_ctx} tokens", file=sys.stderr)
+            except ValueError:
+                if not globals().get('_SILENT_MODE', False):
+                    print(f"警告: OLLAMA_NUM_CTXの値が無効です: {env_num_ctx}", file=sys.stderr)
+
+    # 環境変数からnum_predictを取得（引数で指定されていない場合）、デフォルトは4096
+    if num_predict is None:
+        env_num_predict = os.environ.get('OLLAMA_NUM_PREDICT')
+        if env_num_predict:
+            try:
+                num_predict = int(env_num_predict)
+                if not globals().get('_SILENT_MODE', False):
+                    print(f"環境変数OLLAMA_NUM_PREDICTから設定: {num_predict} tokens", file=sys.stderr)
+            except ValueError:
+                if not globals().get('_SILENT_MODE', False):
+                    print(f"警告: OLLAMA_NUM_PREDICTの値が無効です: {env_num_predict}", file=sys.stderr)
+                num_predict = 4096
+        else:
+            num_predict = 4096
+
     try:
         # 並列実行時のログ混雑を避けるため、条件付きでログ出力
         if not globals().get('_SILENT_MODE', False):
             print(f"LLMクエリ開始 (モデル: {model})", file=sys.stderr)
 
-        # モデルのコンテキスト長を自動取得
-        context_length = get_model_context_length(model)
-        
+        # コンテキスト長の決定（優先順位: 引数 > 環境変数 > モデル情報から自動取得）
+        if num_ctx:
+            context_length = num_ctx
+            if not globals().get('_SILENT_MODE', False):
+                print(f"コンテキスト長を手動設定: {context_length} tokens", file=sys.stderr)
+        else:
+            # モデルのコンテキスト長を自動取得
+            context_length = get_model_context_length(model)
+            if context_length and not globals().get('_SILENT_MODE', False):
+                print(f"コンテキスト長を自動取得: {context_length} tokens", file=sys.stderr)
+
         # generateオプションを準備
         options = {
             "temperature": 0.4,        # 反復ループ防止のため適度なランダム性を確保
             "top_p": 0.9,
             "repeat_penalty": 1.1,     # 反復抑制: 同じ語句の繰り返しにペナルティ
             "frequency_penalty": 0.1,  # 頻出語抑制: 頻繁に使われる語句にペナルティ
-            "num_predict": 2048,       # 最大生成トークン数制限で異常長出力を防止
+            "num_predict": num_predict,  # 最大生成トークン数（デフォルト4096）
         }
-        
+
+        if not globals().get('_SILENT_MODE', False):
+            print(f"最大生成トークン数: {num_predict} tokens", file=sys.stderr)
+
         # コンテキスト長が取得できた場合はnum_ctxを設定
         if context_length:
             options["num_ctx"] = context_length
-            if not globals().get('_SILENT_MODE', False):
-                print(f"コンテキスト長を設定: {context_length} tokens", file=sys.stderr)
-        
+
         response = ollama.generate(
             model=model,
             prompt=prompt,
@@ -244,7 +282,8 @@ def query_llm(prompt: str, model: str = None):
 
 
 def single_document_qa(doc_path: str, question: str, template_name: str = "baseline",
-                      conversation_history: List[Dict[str, str]] = None, model: str = None) -> dict:
+                      conversation_history: List[Dict[str, str]] = None, model: str = None,
+                      num_ctx: int = None, num_predict: int = None) -> dict:
     """
     単一ドキュメントに対する質問応答を実行
 
@@ -254,6 +293,8 @@ def single_document_qa(doc_path: str, question: str, template_name: str = "basel
         template_name: 使用するプロンプトテンプレート名
         conversation_history: 対話履歴
         model: 使用するOllamaモデル名
+        num_ctx: コンテキスト長（手動指定する場合）
+        num_predict: 最大生成トークン数（手動指定する場合）
 
     Returns:
         dict: 結果情報を含む辞書
@@ -288,7 +329,7 @@ def single_document_qa(doc_path: str, question: str, template_name: str = "basel
 
         # LLMクエリ実行
         llm_start = time.time()
-        answer, llm_metadata = query_llm(prompt, model)
+        answer, llm_metadata = query_llm(prompt, model, num_ctx, num_predict)
         llm_time = time.time() - llm_start
 
         # 総実行時間計算
@@ -322,7 +363,8 @@ def single_document_qa(doc_path: str, question: str, template_name: str = "basel
         raise Exception(f"処理中にエラーが発生しました: {e}")
 
 
-def interactive_mode(doc_path: str, template_name: str = "baseline", model: str = None):
+def interactive_mode(doc_path: str, template_name: str = "baseline", model: str = None,
+                    num_ctx: int = None, num_predict: int = None):
     """
     対話継続モード
 
@@ -330,6 +372,8 @@ def interactive_mode(doc_path: str, template_name: str = "baseline", model: str 
         doc_path: ドキュメントファイルのパス
         template_name: 使用するプロンプトテンプレート名
         model: 使用するOllamaモデル名
+        num_ctx: コンテキスト長（手動指定する場合）
+        num_predict: 最大生成トークン数（手動指定する場合）
     """
     print("=" * 60)
     print(f"対話モード開始")
@@ -359,7 +403,8 @@ def interactive_mode(doc_path: str, template_name: str = "baseline", model: str 
 
             # 質問応答実行
             try:
-                result = single_document_qa(doc_path, question, template_name, conversation_history, model)
+                result = single_document_qa(doc_path, question, template_name, conversation_history,
+                                          model, num_ctx, num_predict)
                 answer = result['answer']
 
                 # 回答表示
@@ -399,6 +444,10 @@ def main():
                        help="使用するプロンプトテンプレート (default: focused)")
     parser.add_argument("-m", "--model", default=None,
                        help="使用するOllamaモデル名 (default: 環境変数OLLAMA_MODEL or mistral-nemo-jp-q4)")
+    parser.add_argument("-c", "--num-ctx", type=int, default=None,
+                       help="コンテキスト長を手動指定 (default: 環境変数OLLAMA_NUM_CTX or モデルから自動取得)")
+    parser.add_argument("-p", "--num-predict", type=int, default=None,
+                       help="最大生成トークン数を指定 (default: 環境変数OLLAMA_NUM_PREDICT or 4096)")
     parser.add_argument("-v", "--verbose", action="store_true", help="詳細な出力を表示")
     parser.add_argument("--list-templates", action="store_true",
                        help="利用可能なテンプレート一覧を表示")
@@ -422,7 +471,7 @@ def main():
     if args.interactive:
         if not args.document:
             parser.error("document is required for interactive mode")
-        interactive_mode(args.document, args.template, args.model)
+        interactive_mode(args.document, args.template, args.model, args.num_ctx, args.num_predict)
         return
 
     # 引数の確認と input() による補完
@@ -446,7 +495,8 @@ def main():
 
     try:
         # 質問応答実行
-        result = single_document_qa(args.document, args.question, args.template, model=args.model)
+        result = single_document_qa(args.document, args.question, args.template,
+                                   model=args.model, num_ctx=args.num_ctx, num_predict=args.num_predict)
 
         # 結果出力
         if args.format == "json":
