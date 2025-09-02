@@ -111,6 +111,42 @@ def create_prompt(document: str, question: str, template_name: str = "baseline",
     return template.format(document=document, question=question)
 
 
+def get_model_context_length(model: str) -> int:
+    """
+    Ollamaからモデル情報を取得してコンテキスト長を返す
+    
+    Args:
+        model: Ollamaモデル名
+    
+    Returns:
+        int: コンテキスト長（取得失敗時はNone）
+    """
+    try:
+        model_info = ollama.show(model)
+        # モデル情報からnum_ctxを取得
+        if 'modelfile' in model_info:
+            # モデルファイルからPARAMETER num_ctxを探す
+            lines = model_info['modelfile'].split('\n')
+            for line in lines:
+                if line.strip().startswith('PARAMETER num_ctx'):
+                    parts = line.split()
+                    if len(parts) >= 3:
+                        return int(parts[2])
+        
+        # modelinfoから直接取得を試みる
+        if 'details' in model_info:
+            if 'parameter_size' in model_info['details']:
+                # パラメータサイズから推定（これは正確ではないため、別の方法を優先）
+                pass
+        
+        # デフォルト値を返す
+        return None
+    except Exception as e:
+        if not globals().get('_SILENT_MODE', False):
+            print(f"モデル情報取得エラー: {e}", file=sys.stderr)
+        return None
+
+
 def query_llm(prompt: str, model: str = None):
     """
     Ollama公式ライブラリを使ってLLMに質問を投げて回答を取得
@@ -135,24 +171,28 @@ def query_llm(prompt: str, model: str = None):
         if not globals().get('_SILENT_MODE', False):
             print(f"LLMクエリ開始 (モデル: {model})", file=sys.stderr)
 
+        # モデルのコンテキスト長を自動取得
+        context_length = get_model_context_length(model)
+        
+        # generateオプションを準備
+        options = {
+            "temperature": 0.4,        # 反復ループ防止のため適度なランダム性を確保
+            "top_p": 0.9,
+            "repeat_penalty": 1.1,     # 反復抑制: 同じ語句の繰り返しにペナルティ
+            "frequency_penalty": 0.1,  # 頻出語抑制: 頻繁に使われる語句にペナルティ
+            "num_predict": 2048,       # 最大生成トークン数制限で異常長出力を防止
+        }
+        
+        # コンテキスト長が取得できた場合はnum_ctxを設定
+        if context_length:
+            options["num_ctx"] = context_length
+            if not globals().get('_SILENT_MODE', False):
+                print(f"コンテキスト長を設定: {context_length} tokens", file=sys.stderr)
+        
         response = ollama.generate(
             model=model,
             prompt=prompt,
-            options={
-                "temperature": 0.4,        # 反復ループ防止のため適度なランダム性を確保
-                "top_p": 0.9,
-                "repeat_penalty": 1.1,     # 反復抑制: 同じ語句の繰り返しにペナルティ
-                "frequency_penalty": 0.1,  # 頻出語抑制: 頻繁に使われる語句にペナルティ
-                "num_predict": 2048,       # 最大生成トークン数制限で異常長出力を防止
-                # Stop sequences (必要時にコメントアウト解除)
-                # "stop": [
-                #     "---",
-                #     "## ",
-                #     "**関連度**:",     # 構造化プロンプトの繰り返し防止
-                #     "\n\n\n",          # 過度な改行の防止
-                #     "=== 回答 ===",    # セクション重複防止
-                # ]
-            }
+            options=options
         )
 
         # メタデータを構築
@@ -182,15 +222,9 @@ def query_llm(prompt: str, model: str = None):
                 print(f"  回答生成: {completion_tokens} tokens", file=sys.stderr)
                 print(f"  合計: {total_tokens} tokens", file=sys.stderr)
 
-            # モデルのコンテキスト長から残りトークンを推定
-            context_lengths = {
-                "mistral-nemo-jp": 128000,  # Mistral Nemo は128k context
-                "llama-elyzsa-jp-8b": 8192,
-                "hf.co/elyza/Llama-3-ELYZA-JP-8B-GGUF": 8192,
-            }
-
-            if model in context_lengths:
-                max_tokens = context_lengths[model]
+            # コンテキスト長が指定されている場合は残りトークンを推定
+            if context_length:
+                max_tokens = context_length
                 remaining_tokens = max_tokens - prompt_tokens
                 metadata["remaining_tokens"] = remaining_tokens
                 metadata["context_usage_percent"] = (prompt_tokens / max_tokens) * 100
@@ -210,7 +244,7 @@ def query_llm(prompt: str, model: str = None):
 
 
 def single_document_qa(doc_path: str, question: str, template_name: str = "baseline",
-                      conversation_history: List[Dict[str, str]] = None) -> dict:
+                      conversation_history: List[Dict[str, str]] = None, model: str = None) -> dict:
     """
     単一ドキュメントに対する質問応答を実行
 
@@ -218,6 +252,8 @@ def single_document_qa(doc_path: str, question: str, template_name: str = "basel
         doc_path: ドキュメントファイルのパス
         question: 質問内容
         template_name: 使用するプロンプトテンプレート名
+        conversation_history: 対話履歴
+        model: 使用するOllamaモデル名
 
     Returns:
         dict: 結果情報を含む辞書
@@ -252,7 +288,7 @@ def single_document_qa(doc_path: str, question: str, template_name: str = "basel
 
         # LLMクエリ実行
         llm_start = time.time()
-        answer, llm_metadata = query_llm(prompt)
+        answer, llm_metadata = query_llm(prompt, model)
         llm_time = time.time() - llm_start
 
         # 総実行時間計算
@@ -286,13 +322,14 @@ def single_document_qa(doc_path: str, question: str, template_name: str = "basel
         raise Exception(f"処理中にエラーが発生しました: {e}")
 
 
-def interactive_mode(doc_path: str, template_name: str = "baseline"):
+def interactive_mode(doc_path: str, template_name: str = "baseline", model: str = None):
     """
     対話継続モード
 
     Args:
         doc_path: ドキュメントファイルのパス
         template_name: 使用するプロンプトテンプレート名
+        model: 使用するOllamaモデル名
     """
     print("=" * 60)
     print(f"対話モード開始")
@@ -322,7 +359,7 @@ def interactive_mode(doc_path: str, template_name: str = "baseline"):
 
             # 質問応答実行
             try:
-                result = single_document_qa(doc_path, question, template_name, conversation_history)
+                result = single_document_qa(doc_path, question, template_name, conversation_history, model)
                 answer = result['answer']
 
                 # 回答表示
@@ -360,6 +397,8 @@ def main():
     parser.add_argument("question", nargs='?', help="質問内容")
     parser.add_argument("-t", "--template", default="focused",
                        help="使用するプロンプトテンプレート (default: focused)")
+    parser.add_argument("-m", "--model", default=None,
+                       help="使用するOllamaモデル名 (default: 環境変数OLLAMA_MODEL or mistral-nemo-jp-q4)")
     parser.add_argument("-v", "--verbose", action="store_true", help="詳細な出力を表示")
     parser.add_argument("--list-templates", action="store_true",
                        help="利用可能なテンプレート一覧を表示")
@@ -383,7 +422,7 @@ def main():
     if args.interactive:
         if not args.document:
             parser.error("document is required for interactive mode")
-        interactive_mode(args.document, args.template)
+        interactive_mode(args.document, args.template, args.model)
         return
 
     # 引数の確認と input() による補完
@@ -407,7 +446,7 @@ def main():
 
     try:
         # 質問応答実行
-        result = single_document_qa(args.document, args.question, args.template)
+        result = single_document_qa(args.document, args.question, args.template, model=args.model)
 
         # 結果出力
         if args.format == "json":
