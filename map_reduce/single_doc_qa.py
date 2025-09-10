@@ -76,8 +76,9 @@ def load_prompt_template(template_name: str) -> str:
     return template_path.read_text(encoding='utf-8')
 
 
-def create_prompt(document: str, question: str, template_name: str = "baseline",
-                 conversation_history: List[Dict[str, str]] = None) -> str:
+def create_prompt(document: str, question: str, document_path: str,
+                  template_name: str = "baseline",
+                  conversation_history: List[Dict[str, str]] = None) -> str:
     """
     テンプレートを使用して質問応答用のプロンプトを作成
 
@@ -92,6 +93,16 @@ def create_prompt(document: str, question: str, template_name: str = "baseline",
     """
     template = load_prompt_template(template_name)
 
+    p = Path(document_path)
+
+    params = {
+        'document':document,
+        'category': p.parent.stem,
+        'document_name': p.stem,
+        'question': question,
+    }
+
+
     # 対話履歴がある場合は追加
     if conversation_history:
         history_text = "\n\n## 過去の質問と回答\n"
@@ -100,7 +111,7 @@ def create_prompt(document: str, question: str, template_name: str = "baseline",
             history_text += f"**回答{i}**: {exchange['answer']}\n"
 
         # テンプレートに履歴を挿入
-        base_prompt = template.format(document=document, question=question)
+        base_prompt = template.format(**params)
         # ドキュメント部分の後に履歴を挿入
         if "---" in base_prompt:
             parts = base_prompt.split("---", 1)
@@ -108,7 +119,7 @@ def create_prompt(document: str, question: str, template_name: str = "baseline",
         else:
             return base_prompt + history_text
 
-    return template.format(document=document, question=question)
+    return template.format(**params)
 
 
 def get_model_context_length(model: str) -> int:
@@ -310,57 +321,53 @@ def single_document_qa(doc_path: str, question: str, template_name: str = "basel
     """
     start_time = time.time()
 
-    try:
-        # ドキュメント読み込み
-        doc_start = time.time()
-        document = read_document(doc_path)
-        doc_time = time.time() - doc_start
+    # ドキュメント読み込み
+    doc_start = time.time()
+    document = read_document(doc_path)
+    doc_time = time.time() - doc_start
 
-        if not globals().get('_SILENT_MODE', False):
-            print(f"ドキュメント読み込み完了: {len(document)} 文字 ({doc_time:.2f}s)", file=sys.stderr)
+    if not globals().get('_SILENT_MODE', False):
+        print(f"ドキュメント読み込み完了: {len(document)} 文字 ({doc_time:.2f}s)", file=sys.stderr)
 
-        # プロンプト作成
-        prompt_start = time.time()
-        prompt = create_prompt(document, question, template_name, conversation_history)
-        prompt_time = time.time() - prompt_start
+    # プロンプト作成
+    prompt_start = time.time()
+    prompt = create_prompt(document, question, doc_path, template_name, conversation_history)
+    prompt_time = time.time() - prompt_start
 
-        if not globals().get('_SILENT_MODE', False):
-            print(f"プロンプト作成完了: {len(prompt)} 文字 (テンプレート: {template_name}, {prompt_time:.2f}s)", file=sys.stderr)
+    if not globals().get('_SILENT_MODE', False):
+        print(f"プロンプト作成完了: {len(prompt)} 文字 (テンプレート: {template_name}, {prompt_time:.2f}s)", file=sys.stderr)
 
-        # LLMクエリ実行
-        llm_start = time.time()
-        answer, llm_metadata = query_llm(prompt, model, num_ctx, num_predict)
-        llm_time = time.time() - llm_start
+    # LLMクエリ実行
+    llm_start = time.time()
+    answer, llm_metadata = query_llm(prompt, model, num_ctx, num_predict)
+    llm_time = time.time() - llm_start
 
-        # 総実行時間計算
-        total_time = time.time() - start_time
+    # 総実行時間計算
+    total_time = time.time() - start_time
 
-        # 結果を辞書として構築
-        result = {
-            "document_path": str(doc_path),
-            "question": question,
-            "template": template_name,
-            "answer": answer,
-            "metadata": {
-                "document_length": len(document),
-                "prompt_length": len(prompt),
-                "timing": {
-                    "document_load_time": doc_time,
-                    "prompt_creation_time": prompt_time,
-                    "llm_query_time": llm_time,
-                    "total_time": total_time
-                },
-                **llm_metadata
-            }
+    # 結果を辞書として構築
+    result = {
+        "document_path": str(doc_path),
+        "question": question,
+        "template": template_name,
+        "answer": answer,
+        "metadata": {
+            "document_length": len(document),
+            "prompt_length": len(prompt),
+            "timing": {
+                "document_load_time": doc_time,
+                "prompt_creation_time": prompt_time,
+                "llm_query_time": llm_time,
+                "total_time": total_time
+            },
+            **llm_metadata
         }
+    }
 
-        if not globals().get('_SILENT_MODE', False):
-            print(f"処理完了: 総実行時間 {total_time:.2f}s (LLM: {llm_time:.2f}s)", file=sys.stderr)
+    if not globals().get('_SILENT_MODE', False):
+        print(f"処理完了: 総実行時間 {total_time:.2f}s (LLM: {llm_time:.2f}s)", file=sys.stderr)
 
-        return result
-
-    except Exception as e:
-        raise Exception(f"処理中にエラーが発生しました: {e}")
+    return result
 
 
 def interactive_mode(doc_path: str, template_name: str = "baseline", model: str = None,
@@ -493,43 +500,39 @@ def main():
         else:
             parser.error("question is required unless --interactive mode is used")
 
-    try:
-        # 質問応答実行
-        result = single_document_qa(args.document, args.question, args.template,
-                                   model=args.model, num_ctx=args.num_ctx, num_predict=args.num_predict)
+    # 質問応答実行
+    result = single_document_qa(args.document, args.question, args.template,
+                               model=args.model, num_ctx=args.num_ctx, num_predict=args.num_predict)
 
-        # 結果出力
-        if args.format == "json":
-            print(json.dumps(result, indent=2, ensure_ascii=False))
-        else:
-            # テキスト形式出力
-            print("=" * 60)
-            print(f"ドキュメント: {result['document_path']}")
-            print(f"質問: {result['question']}")
-            print(f"テンプレート: {result['template']}")
-            print("=" * 60)
-            print(result['answer'])
+    # 結果出力
+    if args.format == "json":
+        print(json.dumps(result, indent=2, ensure_ascii=False))
+    else:
+        # テキスト形式出力
+        print("=" * 60)
+        print(f"ドキュメント: {result['document_path']}")
+        print(f"質問: {result['question']}")
+        print(f"テンプレート: {result['template']}")
+        print("=" * 60)
+        print(result['answer'])
 
-            if args.verbose:
-                print("\n" + "=" * 60)
-                print("実行情報:")
-                metadata = result['metadata']
-                print(f"  ドキュメント長: {metadata.get('document_length', 'N/A')} 文字")
-                print(f"  プロンプト長: {metadata.get('prompt_length', 'N/A')} 文字")
-                if 'total_tokens' in metadata:
-                    print(f"  使用トークン: {metadata['total_tokens']} tokens")
-                    print(f"  残りコンテキスト: {metadata.get('remaining_tokens', 'N/A')} tokens")
-                if 'timing' in metadata:
-                    timing = metadata['timing']
-                    print(f"  実行時間:")
-                    print(f"    ドキュメント読み込み: {timing['document_load_time']:.2f}s")
-                    print(f"    プロンプト作成: {timing['prompt_creation_time']:.2f}s")
-                    print(f"    LLM処理: {timing['llm_query_time']:.2f}s")
-                    print(f"    総実行時間: {timing['total_time']:.2f}s")
+        if args.verbose:
+            print("\n" + "=" * 60)
+            print("実行情報:")
+            metadata = result['metadata']
+            print(f"  ドキュメント長: {metadata.get('document_length', 'N/A')} 文字")
+            print(f"  プロンプト長: {metadata.get('prompt_length', 'N/A')} 文字")
+            if 'total_tokens' in metadata:
+                print(f"  使用トークン: {metadata['total_tokens']} tokens")
+                print(f"  残りコンテキスト: {metadata.get('remaining_tokens', 'N/A')} tokens")
+            if 'timing' in metadata:
+                timing = metadata['timing']
+                print(f"  実行時間:")
+                print(f"    ドキュメント読み込み: {timing['document_load_time']:.2f}s")
+                print(f"    プロンプト作成: {timing['prompt_creation_time']:.2f}s")
+                print(f"    LLM処理: {timing['llm_query_time']:.2f}s")
+                print(f"    総実行時間: {timing['total_time']:.2f}s")
 
-    except Exception as e:
-        print(f"エラー: {e}", file=sys.stderr)
-        sys.exit(1)
 
 
 if __name__ == "__main__":
