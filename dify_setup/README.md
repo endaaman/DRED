@@ -19,7 +19,7 @@ DifyとOllamaを使用した行政文書向けRAGシステムの構築環境
 
 ### 手動セットアップ
 ```bash
-cd dify-setup
+cd dify_setup
 docker compose up -d
 ```
 

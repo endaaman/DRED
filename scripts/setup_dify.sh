@@ -27,7 +27,7 @@ fi
 
 echo "✅ Docker & Docker Compose確認済み"
 
-cd dify-setup
+cd dify_setup
 
 # 必要なディレクトリの事前作成（権限問題対策）
 echo "📁 必要なディレクトリを作成中..."

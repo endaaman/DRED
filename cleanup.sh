@@ -4,7 +4,7 @@ echo "🧹 DRED プロジェクトクリーンアップスクリプト"
 echo "=============================================="
 
 # 現在のディレクトリがプロジェクトルートかチェック
-if [ ! -f "CLAUDE.md" ] || [ ! -d "dify-setup" ]; then
+if [ ! -f "CLAUDE.md" ] || [ ! -d "dify_setup" ]; then
     echo "❌ エラー: プロジェクトルートディレクトリで実行してください"
     exit 1
 fi
@@ -15,24 +15,24 @@ echo ""
 
 # Dockerコンテナとネットワークの停止・削除
 echo "🐳 Dockerコンテナの停止と削除..."
-cd dify-setup
+cd dify_setup
 if [ -f "docker-compose.yaml" ]; then
     docker compose down --remove-orphans --volumes 2>/dev/null || true
-    
+
     # 強制的にコンテナを削除
-    CONTAINERS=$(docker ps -a --filter "name=dify-setup" --format "{{.Names}}" 2>/dev/null)
+    CONTAINERS=$(docker ps -a --filter "name=dify_setup" --format "{{.Names}}" 2>/dev/null)
     if [ -n "$CONTAINERS" ]; then
         echo "🗑️  残存コンテナを削除中..."
         echo "$CONTAINERS" | xargs -r docker rm -f
     fi
-    
+
     # ネットワークの削除
-    NETWORKS=$(docker network ls --filter "name=dify-setup" --format "{{.Name}}" 2>/dev/null)
+    NETWORKS=$(docker network ls --filter "name=dify_setup" --format "{{.Name}}" 2>/dev/null)
     if [ -n "$NETWORKS" ]; then
         echo "🌐 残存ネットワークを削除中..."
         echo "$NETWORKS" | xargs -r docker network rm 2>/dev/null || true
     fi
-    
+
     echo "✅ Dockerコンテナとネットワークの削除完了"
 else
     echo "⚠️  docker-compose.yamlが見つかりません"
@@ -46,16 +46,16 @@ echo "🔍 root権限ディレクトリの確認..."
 
 ROOT_DIRS=""
 
-# dify-setup下のroot権限ディレクトリをチェック
-if [ -d "dify-setup" ]; then
+# dify_setup下のroot権限ディレクトリをチェック
+if [ -d "dify_setup" ]; then
     # よくあるroot権限ディレクトリ
     DIRS_TO_CHECK=(
-        "dify-setup/volumes"
-        "dify-setup/nginx/conf.d"
-        "dify-setup/logs"
-        "dify-setup/storage"
+        "dify_setup/volumes"
+        "dify_setup/nginx/conf.d"
+        "dify_setup/logs"
+        "dify_setup/storage"
     )
-    
+
     for dir in "${DIRS_TO_CHECK[@]}"; do
         if [ -d "$dir" ]; then
             OWNER=$(stat -c '%U' "$dir" 2>/dev/null || echo "unknown")
@@ -64,12 +64,12 @@ if [ -d "dify-setup" ]; then
             fi
         fi
     done
-    
+
     # ファイルもチェック
-    if [ -f "dify-setup/.env" ]; then
-        OWNER=$(stat -c '%U' "dify-setup/.env" 2>/dev/null || echo "unknown")
-        if [ "$OWNER" = "root" ] || [ ! -w "dify-setup/.env" ]; then
-            ROOT_DIRS="$ROOT_DIRS dify-setup/.env"
+    if [ -f "dify_setup/.env" ]; then
+        OWNER=$(stat -c '%U' "dify_setup/.env" 2>/dev/null || echo "unknown")
+        if [ "$OWNER" = "root" ] || [ ! -w "dify_setup/.env" ]; then
+            ROOT_DIRS="$ROOT_DIRS dify_setup/.env"
         fi
     fi
 fi
@@ -105,11 +105,11 @@ fi
 
 # .envファイルのバックアップと削除
 echo ""
-if [ -f "dify-setup/.env" ]; then
-    if [ -w "dify-setup/.env" ]; then
+if [ -f "dify_setup/.env" ]; then
+    if [ -w "dify_setup/.env" ]; then
         echo "💾 .envファイルをバックアップ中..."
-        cp "dify-setup/.env" "dify-setup/.env.backup.$(date +%Y%m%d_%H%M%S)"
-        rm "dify-setup/.env"
+        cp "dify_setup/.env" "dify_setup/.env.backup.$(date +%Y%m%d_%H%M%S)"
+        rm "dify_setup/.env"
         echo "✅ .envファイルをバックアップして削除しました"
     else
         echo "⚠️  .envファイルは削除できません（権限不足）"
@@ -119,10 +119,10 @@ fi
 # 削除可能なディレクトリを削除
 echo ""
 echo "🧼 一般ファイルのクリーンアップ..."
-rm -rf dify-setup/volumes 2>/dev/null || true
-rm -rf dify-setup/storage 2>/dev/null || true
-rm -rf dify-setup/logs 2>/dev/null || true
-rm -f dify-setup/nginx.conf 2>/dev/null || true
+rm -rf dify_setup/volumes 2>/dev/null || true
+rm -rf dify_setup/storage 2>/dev/null || true
+rm -rf dify_setup/logs 2>/dev/null || true
+rm -f dify_setup/nginx.conf 2>/dev/null || true
 
 echo ""
 echo "🎉 クリーンアップ完了!"
