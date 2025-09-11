@@ -447,8 +447,8 @@ def main():
 
     parser.add_argument("document", nargs='?', help="質問対象のドキュメントファイルパス")
     parser.add_argument("question", nargs='?', help="質問内容")
-    parser.add_argument("-t", "--template", default="focused",
-                       help="使用するプロンプトテンプレート (default: focused)")
+    parser.add_argument("-t", "--template", default="sandwich",
+                       help="使用するプロンプトテンプレート (default: sandwich)")
     parser.add_argument("-m", "--model", default=None,
                        help="使用するOllamaモデル名 (default: 環境変数OLLAMA_MODEL or mistral-nemo-jp-q4)")
     parser.add_argument("-c", "--num-ctx", type=int, default=None,
