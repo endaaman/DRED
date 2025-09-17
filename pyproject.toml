@@ -4,9 +4,12 @@ version = "0.1.0"
 description = "行政文書RAGシステム - Map-Reduce方式によるドキュメント質問応答"
 requires-python = ">=3.12"
 dependencies = [
+    "matplotlib>=3.10.6",
+    "numpy>=2.3.2",
     "ollama>=0.3.0",
     "openpyxl>=3.1.5",
     "pandas>=2.3.2",
+    "tiktoken>=0.11.0",
     "tqdm>=4.66.0",
     "xlsxwriter>=3.2.5",
 ]
