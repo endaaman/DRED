@@ -212,7 +212,7 @@ def query_llm(prompt: str, model: str = None, num_ctx: int = None, num_predict: 
             print(f"LLMクエリ開始 (モデル: {model})", file=sys.stderr)
 
         # コンテキスト長の決定（優先順位: 引数 > 環境変数 > モデル情報から自動取得）
-        if num_ctx:
+        if num_ctx:  # 0でも有効な値として扱う
             context_length = num_ctx
             if not globals().get('_SILENT_MODE', False):
                 print(f"コンテキスト長を手動設定: {context_length} tokens", file=sys.stderr)
