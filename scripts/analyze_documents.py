@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+
 """
 行政文書RAGシステム用の文書分析・可視化スクリプト
 カテゴリ別にtxtファイルの文字数とファイルサイズを可視化
@@ -10,6 +11,7 @@ from pathlib import Path
 from typing import Dict, List, Tuple
 import matplotlib.pyplot as plt
 import matplotlib.font_manager as fm
+from matplotlib.patches import Patch
 import numpy as np
 import ollama
 
@@ -141,7 +143,6 @@ def create_char_count_chart(data: List[Dict], output_path: str):
     ax.grid(True, axis='x', alpha=0.3)
 
     # 凡例の作成
-    from matplotlib.patches import Patch
     legend_elements = [Patch(facecolor=color, label=cat)
                       for cat, color in CATEGORY_COLORS.items()]
     legend_elements.append(plt.Line2D([0], [0], color='red', linestyle='--', label='100k文字'))
@@ -149,7 +150,7 @@ def create_char_count_chart(data: List[Dict], output_path: str):
 
     # X軸のフォーマット
     ax.ticklabel_format(style='plain', axis='x')
-    ax.set_xlim(0, max(char_counts) * 1.1)
+    print('MAX', max(char_counts + [120000]) * 1.1)
 
     # 値の表示
     for i, (bar, count) in enumerate(zip(bars, char_counts)):
@@ -161,6 +162,7 @@ def create_char_count_chart(data: List[Dict], output_path: str):
                    f' {count:,}', ha='left', va='center', fontsize=7)
 
     plt.tight_layout()
+    ax.set_xlim(0, max(char_counts + [100000]) * 1.1)
     plt.savefig(output_path, dpi=300, bbox_inches='tight')
     plt.close()
 
@@ -197,7 +199,6 @@ def create_token_count_chart(data: List[Dict], output_path: str):
     ax.grid(True, axis='x', alpha=0.3)
 
     # 凡例の作成
-    from matplotlib.patches import Patch
     legend_elements = [Patch(facecolor=color, label=cat)
                       for cat, color in CATEGORY_COLORS.items()]
     legend_elements.append(plt.Line2D([0], [0], color='red', linestyle='--', label='128kトークン'))
@@ -250,7 +251,6 @@ def create_file_size_chart(data: List[Dict], output_path: str):
     ax.grid(True, axis='x', alpha=0.3)
 
     # 凡例の作成
-    from matplotlib.patches import Patch
     legend_elements = [Patch(facecolor=color, label=cat)
                       for cat, color in CATEGORY_COLORS.items()]
     ax.legend(handles=legend_elements, loc='lower right', fontsize=8)
