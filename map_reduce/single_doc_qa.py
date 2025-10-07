@@ -20,11 +20,12 @@ from pathlib import Path
 from typing import List, Dict
 
 import ollama
+import chardet
 
 
 def read_document(doc_path: str) -> str:
     """
-    ドキュメントファイルを読み込む
+    ドキュメントファイルを読み込む（エンコーディング自動検出）
 
     Args:
         doc_path: ドキュメントファイルのパス
@@ -34,20 +35,18 @@ def read_document(doc_path: str) -> str:
 
     Raises:
         FileNotFoundError: ファイルが存在しない場合
-        UnicodeDecodeError: ファイルの読み込みに失敗した場合
     """
     path = Path(doc_path)
     if not path.exists():
         raise FileNotFoundError(f"Document not found: {doc_path}")
 
-    try:
-        return path.read_text(encoding='utf-8')
-    except UnicodeDecodeError:
-        # UTF-8で読み込めない場合はShift_JISを試す
-        try:
-            return path.read_text(encoding='shift_jis')
-        except UnicodeDecodeError:
-            raise UnicodeDecodeError(f"Could not decode file: {doc_path}")
+    # ファイル内容をバイナリで読み込んでエンコーディングを検出
+    raw_data = path.read_bytes()
+    detected = chardet.detect(raw_data)
+    encoding = detected['encoding']
+
+    # 検出されたエンコーディングで読み込み
+    return raw_data.decode(encoding)
 
 
 def load_prompt_template(template_name: str) -> str:
@@ -175,9 +174,9 @@ def query_llm(prompt: str, model: str = None, num_ctx: int = None, num_predict: 
         Exception: Ollamaとの通信でエラーが発生した場合
     """
 
-    # 環境変数からモデル名を取得、デフォルトは日本語特化Q4版
+    # 環境変数からモデル名を取得、デフォルトはGPT-OSS 20B
     if model is None:
-        model = os.environ.get('OLLAMA_MODEL', 'mistral-nemo-jp-q4')
+        model = os.environ.get('OLLAMA_MODEL', 'gpt-oss:20b')
 
     # 環境変数からnum_ctxを取得（引数で指定されていない場合）
     if num_ctx is None:
@@ -190,6 +189,9 @@ def query_llm(prompt: str, model: str = None, num_ctx: int = None, num_predict: 
             except ValueError:
                 if not globals().get('_SILENT_MODE', False):
                     print(f"警告: OLLAMA_NUM_CTXの値が無効です: {env_num_ctx}", file=sys.stderr)
+        else:
+            # デフォルト: 128k
+            num_ctx = 131072
 
     # 環境変数からnum_predictを取得（引数で指定されていない場合）、デフォルトは4096
     if num_predict is None:
@@ -450,9 +452,9 @@ def main():
     parser.add_argument("-t", "--template", default="sandwich",
                        help="使用するプロンプトテンプレート (default: sandwich)")
     parser.add_argument("-m", "--model", default=None,
-                       help="使用するOllamaモデル名 (default: 環境変数OLLAMA_MODEL or mistral-nemo-jp-q4)")
+                       help="使用するOllamaモデル名 (default: 環境変数OLLAMA_MODEL or gpt-oss:20b)")
     parser.add_argument("-c", "--num-ctx", type=int, default=None,
-                       help="コンテキスト長を手動指定 (default: 環境変数OLLAMA_NUM_CTX or モデルから自動取得)")
+                       help="コンテキスト長を手動指定 (default: 環境変数OLLAMA_NUM_CTX or 131072)")
     parser.add_argument("-p", "--num-predict", type=int, default=None,
                        help="最大生成トークン数を指定 (default: 環境変数OLLAMA_NUM_PREDICT or 4096)")
     parser.add_argument("-v", "--verbose", action="store_true", help="詳細な出力を表示")
