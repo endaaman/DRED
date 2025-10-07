@@ -68,6 +68,7 @@ def create_markdown_output(
     document_name: str,
     document_path: str,
     answer: str,
+    reference_answer: Optional[str] = None,
     result: Optional[Dict] = None,
     status: str = "success",
     error_message: Optional[str] = None
@@ -134,11 +135,25 @@ def create_markdown_output(
         "",
         question,
         "",
+    ]
+
+    # 模範解答を追加
+    if reference_answer:
+        md_lines.extend([
+            "---",
+            "",
+            "# 模範解答",
+            "",
+            reference_answer,
+            "",
+        ])
+
+    md_lines.extend([
         "---",
         "",
         "# 回答",
         "",
-    ]
+    ])
 
     if status == "success":
         md_lines.append(answer)
@@ -291,6 +306,8 @@ def main():
                        help="コンテキスト長 (default: 環境変数OLLAMA_NUM_CTXまたはモデルから自動取得)")
     parser.add_argument("--num-predict", type=int, default=None,
                        help="最大生成トークン数 (default: 環境変数OLLAMA_NUM_PREDICTまたは4096)")
+    parser.add_argument("--sheet", default=None,
+                       help="処理対象のシート名 (default: 全シート)")
     parser.add_argument("--dry-run", action="store_true",
                        help="実行せずに対象ファイルと質問を表示")
 
@@ -316,7 +333,23 @@ def main():
 
     # QA.xlsxを読み込み
     print(f"QAファイル読み込み中: {args.qa_file}")
-    df = pd.read_excel(args.qa_file, header=2)
+
+    # シート名を決定
+    xls = pd.ExcelFile(args.qa_file)
+    if args.sheet:
+        if args.sheet not in xls.sheet_names:
+            print(f"エラー: シート '{args.sheet}' が見つかりません", file=sys.stderr)
+            print(f"利用可能なシート: {', '.join(xls.sheet_names)}", file=sys.stderr)
+            sys.exit(1)
+        sheet_name = args.sheet
+    else:
+        # 指定がなければ先頭のシート
+        sheet_name = xls.sheet_names[0]
+
+    print(f"処理対象シート: {sheet_name}")
+
+    # シートを読み込み
+    df = pd.read_excel(args.qa_file, sheet_name=sheet_name, header=2)
     print(f"質問数: {len(df)}")
 
     # データを準備
@@ -327,6 +360,7 @@ def main():
         no = int(row['NO'])
         question = str(row['質問'])
         doc_column = row['ドキュメント']
+        reference_answer = str(row['回答']) if pd.notna(row['回答']) else None
 
         # ドキュメント列を解析
         doc_names = parse_document_column(doc_column)
@@ -353,6 +387,7 @@ def main():
         qa_data.append({
             'no': no,
             'question': question,
+            'reference_answer': reference_answer,
             'doc_names': doc_names,
             'files': all_files
         })
@@ -396,6 +431,7 @@ def main():
                 document_name=", ".join(qa['doc_names']),
                 document_path="N/A",
                 answer="",
+                reference_answer=qa['reference_answer'],
                 status="not_found"
             )
 
@@ -449,6 +485,7 @@ def main():
                 document_name=doc_path.name,
                 document_path=str(doc_path),
                 answer=answer,
+                reference_answer=qa['reference_answer'],
                 result=result,
                 status=status,
                 error_message=result.get('error') if result else None
