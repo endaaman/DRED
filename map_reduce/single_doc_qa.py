@@ -441,7 +441,7 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 使用例:
-    python single_doc_qa.py data/要綱/空き家/空き家ガイドライン●.txt "管理不全空家等の定義は何ですか？"
+    python single_doc_qa.py data/要綱TEXT/空き家/空き家ガイドライン●.txt "管理不全空家等の定義は何ですか？"
         """
     )
 
