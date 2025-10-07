@@ -229,7 +229,7 @@ def query_llm(prompt: str, model: str = None, num_ctx: int = None, num_predict: 
             "temperature": 0.4,        # 反復ループ防止のため適度なランダム性を確保
             "top_p": 0.9,
             "repeat_penalty": 1.1,     # 反復抑制: 同じ語句の繰り返しにペナルティ
-            "frequency_penalty": 0.1,  # 頻出語抑制: 頻繁に使われる語句にペナルティ
+            "frequency_penalty": 0.3,  # 頻出語抑制: 頻繁に使われる語句にペナルティ
             "num_predict": num_predict,  # 最大生成トークン数（デフォルト4096）
         }
 
@@ -339,10 +339,32 @@ def single_document_qa(doc_path: str, question: str, template_name: str = "basel
     if not globals().get('_SILENT_MODE', False):
         print(f"プロンプト作成完了: {len(prompt)} 文字 (テンプレート: {template_name}, {prompt_time:.2f}s)", file=sys.stderr)
 
-    # LLMクエリ実行
-    llm_start = time.time()
-    answer, llm_metadata = query_llm(prompt, model, num_ctx, num_predict)
-    llm_time = time.time() - llm_start
+    # LLMクエリ実行（空の回答の場合は再試行）
+    max_retries = 3
+    retry_count = 0
+    answer = ""
+    llm_metadata = {}
+    llm_time = 0
+
+    while retry_count < max_retries:
+        llm_start = time.time()
+        answer, llm_metadata = query_llm(prompt, model, num_ctx, num_predict)
+        llm_time = time.time() - llm_start
+
+        # 回答が十分な長さがあればOK
+        if answer and len(answer.strip()) >= 10:
+            break
+
+        # 再試行
+        retry_count += 1
+        if retry_count < max_retries:
+            if not globals().get('_SILENT_MODE', False):
+                print(f"⚠️  警告: 回答が空または短すぎます（{len(answer.strip())}文字）。再試行します ({retry_count}/{max_retries})...", file=sys.stderr)
+
+    # 最後まで空だった場合の警告
+    if not answer or len(answer.strip()) < 10:
+        if not globals().get('_SILENT_MODE', False):
+            print(f"⚠️  警告: {max_retries}回試行しましたが、十分な回答が得られませんでした", file=sys.stderr)
 
     # 総実行時間計算
     total_time = time.time() - start_time

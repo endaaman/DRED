@@ -22,9 +22,9 @@ FONT_PATH = "/usr/share/fonts/line-seed/LINESeedJP_TTF_Rg.ttf"
 CATEGORY_COLORS = {
     "10_空き家": "#FF6B6B",
     "20_立地適正化": "#4ECDC4",
-    "30_街かん`": "#45B7D1",
-    "40_官民連携まちなか再生推進事業": "#96CEB4",
-    "50_都市防災総合推進事業": "#FFEAA7"
+    "30_街かん": "#45B7D1",
+    "40_官まち": "#96CEB4",
+    "50_都市防災": "#FFEAA7"
 }
 
 # 100k文字の閾値

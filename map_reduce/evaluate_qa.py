@@ -38,8 +38,31 @@ def find_document_files(doc_name: str, base_path: Path = Path("data/要綱TEXT")
     """
     # 前方一致で検索
     pattern = f"{doc_name}*.txt"
-    files = sorted(base_path.rglob(pattern))
-    return files
+    all_files = base_path.rglob(pattern)
+
+    # フィルタリング
+    filtered_files = []
+    for file_path in all_files:
+        # _removed/ を含むパスは除外
+        if '_removed' in file_path.parts:
+            continue
+
+        stem = file_path.stem  # 拡張子を除いたファイル名
+
+        # 完全一致
+        if stem == doc_name:
+            filtered_files.append(file_path)
+            continue
+
+        # 前方一致（ただし30-1→30-10のような誤マッチを防ぐ）
+        if stem.startswith(doc_name):
+            # doc_nameの末尾が数字で、次の文字も数字ならNG
+            if doc_name and doc_name[-1].isdigit():
+                if len(stem) > len(doc_name) and stem[len(doc_name)].isdigit():
+                    continue  # 30-1 → 30-10 のパターンを除外
+            filtered_files.append(file_path)
+
+    return sorted(filtered_files)
 
 
 def parse_document_column(doc_value: str) -> List[str]:
@@ -199,7 +222,12 @@ def process_single_qa(
     if dry_run:
         return "success", None
 
-    # single_doc_qaを実行
+    # single_doc_qaを実行（ファイルエラーは正常系として扱う）
+    if not doc_path.exists():
+        return "not_found", {"error": f"ファイルが存在しません: {doc_path}"}
+
+    # ファイルの読み込みやLLM実行は内部でエラーが発生する可能性がある
+    # それらはすべて上位に伝播させる（プログラムエラーとして扱う）
     result = single_document_qa(
         doc_path=str(doc_path),
         question=question,
@@ -261,8 +289,8 @@ def dry_run_display(qa_data: List[Dict], base_path: Path, template: str, model: 
                 total_not_found += 1
                 print(f"[{qa['no']:02d}_??] ✗ NOT FOUND")
                 print(f"  ドキュメント名: {doc_name}")
-                print(f"  検索パターン: data/要綱TEXT/**/{doc_name}*.txt")
-                print(f"  出力先: run/qa/未分類/{qa['no']:02d}_01.md (status: not_found)")
+                print(f"  検索パターン: {base_path}/{doc_name}*.txt")
+                print(f"  出力先: run/qa/{qa['category']}/{qa['no']:02d}_01.md (status: not_found)")
                 print()
         else:
             for idx, file_info in enumerate(qa['files'], 1):
@@ -350,13 +378,17 @@ def main():
 
     # シートを読み込み
     df = pd.read_excel(args.qa_file, sheet_name=sheet_name, header=2)
-    print(f"質問数: {len(df)}")
 
     # データを準備
     qa_data = []
-    base_path = Path("data/要綱TEXT")
+    # シート名がカテゴリディレクトリ名に対応
+    category_path = Path("data/要綱TEXT") / sheet_name
 
     for idx, row in df.iterrows():
+        # 質問が空（NaN）の行はスキップ
+        if pd.isna(row['質問']) or str(row['質問']).strip() == '' or str(row['質問']) == 'nan':
+            continue
+
         no = int(row['NO'])
         question = str(row['質問'])
         doc_column = row['ドキュメント']
@@ -365,23 +397,21 @@ def main():
         # ドキュメント列を解析
         doc_names = parse_document_column(doc_column)
 
-        # 各ドキュメント名でファイルを検索
+        # 各ドキュメント名でファイルを検索（カテゴリディレクトリ内のみ）
         all_files = []
         for doc_name in doc_names:
-            files = find_document_files(doc_name, base_path)
+            files = find_document_files(doc_name, category_path)
             for file_path in files:
-                category = file_path.parent.name
                 all_files.append({
                     'doc_name': doc_name,
                     'path': file_path,
-                    'category': category,
+                    'category': sheet_name,  # シート名をカテゴリとして使用
                     'output_path': None  # 後で設定
                 })
 
         # 出力パスを設定
         for seq, file_info in enumerate(all_files, 1):
-            category = file_info['category']
-            output_path = Path(args.output_dir) / category / f"{no:02d}_{seq:02d}.md"
+            output_path = Path(args.output_dir) / sheet_name / f"{no:02d}_{seq:02d}.md"
             file_info['output_path'] = output_path
 
         qa_data.append({
@@ -389,12 +419,15 @@ def main():
             'question': question,
             'reference_answer': reference_answer,
             'doc_names': doc_names,
-            'files': all_files
+            'files': all_files,
+            'category': sheet_name  # カテゴリを追加
         })
+
+    print(f"質問数: {len(qa_data)}")
 
     # Dry runモード
     if args.dry_run:
-        dry_run_display(qa_data, base_path, args.template, model)
+        dry_run_display(qa_data, category_path, args.template, model)
         return
 
     # 実際の処理
@@ -418,8 +451,8 @@ def main():
             # ドキュメントが見つからなかった場合
             print(f"  ⚠️  ドキュメントが見つかりませんでした")
 
-            # 未分類ディレクトリに not_found ステータスで保存
-            output_dir = Path(args.output_dir) / "未分類"
+            # カテゴリディレクトリに not_found ステータスで保存
+            output_dir = Path(args.output_dir) / qa['category']
             output_dir.mkdir(parents=True, exist_ok=True)
             output_path = output_dir / f"{no:02d}_01.md"
 
@@ -427,7 +460,7 @@ def main():
                 question=question,
                 no=no,
                 seq=1,
-                category="未分類",
+                category=qa['category'],
                 document_name=", ".join(qa['doc_names']),
                 document_path="N/A",
                 answer="",
