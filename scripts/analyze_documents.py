@@ -7,13 +7,14 @@
 
 import os
 import sys
+import argparse
 from pathlib import Path
 from typing import Dict, List, Tuple
 import matplotlib.pyplot as plt
 import matplotlib.font_manager as fm
 from matplotlib.patches import Patch
 import numpy as np
-import ollama
+from transformers import AutoTokenizer
 
 # 日本語フォントの設定
 FONT_PATH = "/usr/share/fonts/line-seed/LINESeedJP_TTF_Rg.ttf"
@@ -24,7 +25,8 @@ CATEGORY_COLORS = {
     "20_立地適正化": "#4ECDC4",
     "30_街かん": "#45B7D1",
     "40_官まち": "#96CEB4",
-    "50_都市防災": "#FFEAA7"
+    "50_都市防災": "#FFEAA7",
+    "60_社会資本": "#B565D8",
 }
 
 # 100k文字の閾値
@@ -45,20 +47,27 @@ def setup_japanese_font():
         plt.rcParams["font.family"] = "sans-serif"
 
 
-def get_token_count(text: str, model: str = 'gpt-oss:20b') -> int:
+def get_token_count_via_ollama(text: str, model: str = 'gpt-oss:20b') -> int:
     """
-    GPT-OSSモデルを使ってトークン数を取得
+    Ollamaを使ってトークン数を取得（非推奨: 遅い）
+
+    注意: この方法は推論エンジンを動かすため非常に遅い。
+    Hugging Faceトークナイザーの使用を推奨。
     """
-    try:
-        response = ollama.generate(model=model, prompt=text, options={'num_predict': 0})
-        return response.get('prompt_eval_count', 0)
-    except Exception as e:
-        print(f"トークン数取得エラー: {e}")
-        # フォールバック: 日本語は約5トークン/文字として推定
-        return len(text) * 5
+    import ollama
+    response = ollama.generate(model=model, prompt=text, options={'num_predict': 0})
+    return response.get('prompt_eval_count', 0)
 
 
-def collect_document_data(base_dir: str, calculate_tokens: bool = True) -> List[Dict]:
+def get_token_count(text: str, tokenizer: AutoTokenizer) -> int:
+    """
+    GPT-OSSトークナイザーを使ってトークン数を取得（高速）
+    """
+    tokens = tokenizer.encode(text)
+    return len(tokens)
+
+
+def collect_document_data(base_dir: str, calculate_tokens: bool = True, tokenizer: AutoTokenizer = None) -> List[Dict]:
     """
     文書データの収集
 
@@ -81,34 +90,30 @@ def collect_document_data(base_dir: str, calculate_tokens: bool = True) -> List[
         category_name = category_dir.name
 
         for txt_file in category_dir.glob("*.txt"):
-            try:
-                # ファイルサイズ取得
-                file_size = txt_file.stat().st_size
+            # ファイルサイズ取得
+            file_size = txt_file.stat().st_size
 
-                # 文字数カウント
-                with open(txt_file, 'r', encoding='utf-8') as f:
-                    content = f.read()
-                    char_count = len(content)
+            # 文字数カウント
+            with open(txt_file, 'r', encoding='utf-8') as f:
+                content = f.read()
+                char_count = len(content)
 
-                file_info = {
-                    'path': str(txt_file),
-                    'name': txt_file.stem,
-                    'category': category_name,
-                    'char_count': char_count,
-                    'file_size': file_size
-                }
+            file_info = {
+                'path': str(txt_file),
+                'name': txt_file.stem,
+                'category': category_name,
+                'char_count': char_count,
+                'file_size': file_size
+            }
 
-                # トークン数計算（オプション）
-                if calculate_tokens:
-                    print(f"  トークン数計算中: {txt_file.name}")
-                    file_info['token_count'] = get_token_count(content)
-                else:
-                    file_info['token_count'] = 0
+            # トークン数計算（オプション）
+            if calculate_tokens and tokenizer:
+                print(f"  トークン数計算中: {txt_file.name}")
+                file_info['token_count'] = get_token_count(content, tokenizer)
+            else:
+                file_info['token_count'] = 0
 
-                data.append(file_info)
-
-            except Exception as e:
-                print(f"エラー: {txt_file} の読み込みに失敗: {e}")
+            data.append(file_info)
 
     return data
 
@@ -148,9 +153,9 @@ def create_char_count_chart(data: List[Dict], output_path: str):
     legend_elements.append(plt.Line2D([0], [0], color='red', linestyle='--', label='100k文字'))
     ax.legend(handles=legend_elements, loc='lower right', fontsize=8)
 
-    # X軸のフォーマット
+    # X軸のフォーマットと範囲設定
     ax.ticklabel_format(style='plain', axis='x')
-    print('MAX', max(char_counts + [120000]) * 1.1)
+    ax.set_xlim(0, max(char_counts + [CHAR_THRESHOLD]) * 1.1)
 
     # 値の表示
     for i, (bar, count) in enumerate(zip(bars, char_counts)):
@@ -162,7 +167,6 @@ def create_char_count_chart(data: List[Dict], output_path: str):
                    f' {count:,}', ha='left', va='center', fontsize=7)
 
     plt.tight_layout()
-    ax.set_xlim(0, max(char_counts + [100000]) * 1.1)
     plt.savefig(output_path, dpi=300, bbox_inches='tight')
     plt.close()
 
@@ -204,9 +208,9 @@ def create_token_count_chart(data: List[Dict], output_path: str):
     legend_elements.append(plt.Line2D([0], [0], color='red', linestyle='--', label='128kトークン'))
     ax.legend(handles=legend_elements, loc='lower right', fontsize=8)
 
-    # X軸のフォーマット
+    # X軸のフォーマットと範囲設定
     ax.ticklabel_format(style='plain', axis='x')
-    ax.set_xlim(0, max(token_counts) * 1.1 if token_counts else 1000)
+    ax.set_xlim(0, max(token_counts + [TOKEN_THRESHOLD]) * 1.1 if token_counts else TOKEN_THRESHOLD * 1.1)
 
     # 値の表示
     for i, (bar, count) in enumerate(zip(bars, token_counts)):
@@ -320,6 +324,11 @@ def print_statistics(data: List[Dict]):
 
 
 def main():
+    # コマンドライン引数のパース
+    parser = argparse.ArgumentParser(description='行政文書RAGシステム用の文書分析・可視化スクリプト')
+    parser.add_argument('--tokens', action='store_true', help='トークン数を計算する（GPT-OSS 20b トークナイザー使用）')
+    args = parser.parse_args()
+
     # 基本設定
     base_dir = "data/要綱TEXT"
     output_dir = "out"
@@ -330,20 +339,31 @@ def main():
     # フォント設定
     setup_japanese_font()
 
+    # トークナイザーのロード
+    tokenizer = None
+    if args.tokens:
+        print("GPT-OSS 20b トークナイザーをロード中...")
+        tokenizer = AutoTokenizer.from_pretrained('openai/gpt-oss-20b')
+        print("✓ トークナイザーのロード完了")
+
     # データ収集
-    print("文書データを収集中...")
-    data = collect_document_data(base_dir, calculate_tokens=False)  # まずトークン計算なしで実行
+    print("\n文書データを収集中...")
+    data = collect_document_data(base_dir, calculate_tokens=args.tokens, tokenizer=tokenizer)
 
     if not data:
         print("エラー: 文書が見つかりませんでした")
         sys.exit(1)
 
-    print(f"{len(data)}個のファイルを分析します")
+    print(f"\n{len(data)}個のファイルを分析します")
+
+    # 出力ファイル名のプレフィックス
+    suffix = "_tokens" if args.tokens else "_chars"
 
     # グラフ作成
-    create_char_count_chart(data, os.path.join(output_dir, "document_analysis_char_count.png"))
-    # create_token_count_chart(data, os.path.join(output_dir, "document_analysis_token_count.png"))  # トークン計算は重いため無効化
-    create_file_size_chart(data, os.path.join(output_dir, "document_analysis_file_size.png"))
+    create_char_count_chart(data, os.path.join(output_dir, f"document_analysis_char_count{suffix}.png"))
+    if args.tokens:
+        create_token_count_chart(data, os.path.join(output_dir, f"document_analysis_token_count{suffix}.png"))
+    create_file_size_chart(data, os.path.join(output_dir, f"document_analysis_file_size{suffix}.png"))
 
     # 統計情報出力
     print_statistics(data)
